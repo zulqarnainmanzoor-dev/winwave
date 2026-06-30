@@ -138,7 +138,7 @@ export default function AuthView({
         onLoginSuccess(
           normalizedPhone,
           data.user?.id || normalizedPhone,
-          data.user,
+          undefined,
           undefined
         );
       }

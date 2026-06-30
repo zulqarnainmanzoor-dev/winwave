@@ -60,7 +60,6 @@ import { useLanguage } from './context/LanguageContext';
 
 import { useUser } from './context/UserContext';
 
-import AdminLogin from './admin/AdminLogin';
 
 import { AdminDashboard as AdminPanel } from './admin/AdminDashboard';
 
