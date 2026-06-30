@@ -10,9 +10,9 @@ import {
 import { useUser } from "../context/UserContext";
 import { useLanguage } from "../context/LanguageContext";
 
-// Hosted JazzCash checkout links keyed by the exact preset deposit amount.
-// Each amount must redirect to its matching gateway URL; only these preset
-// amounts are payable via JazzCash. Easypaisa links will be added later.
+// Hosted PKPay checkout links keyed by the exact preset deposit amount, per
+// payment method. Each amount redirects to its matching gateway URL; only
+// these preset amounts are payable.
 const JAZZCASH_DEPOSIT_LINKS: Record<number, string> = {
   300: "https://cashier.pkpay.click/pay/8fb65585df22bb6c",
   500: "https://cashier.pkpay.click/pay/7099555e5d96948a",
@@ -26,6 +26,26 @@ const JAZZCASH_DEPOSIT_LINKS: Record<number, string> = {
   20000: "https://cashier.pkpay.click/pay/c0346b6c6f66d9e1",
   30000: "https://cashier.pkpay.click/pay/46ed4014c01a2dd2",
   50000: "https://cashier.pkpay.click/pay/aa3071795294a6ed",
+};
+
+const EASYPAISA_DEPOSIT_LINKS: Record<number, string> = {
+  300: "https://cashier.pkpay.click/pay/445f3a965fe98b38",
+  500: "https://cashier.pkpay.click/pay/d74d75b92aa0c111",
+  800: "https://cashier.pkpay.click/pay/d0c12155e83081d0",
+  1000: "https://cashier.pkpay.click/pay/8ad27749f7849fae",
+  2000: "https://cashier.pkpay.click/pay/4428560b30bfb6d1",
+  3000: "https://cashier.pkpay.click/pay/efc061dbaff90b93",
+  5000: "https://cashier.pkpay.click/pay/10b2aad1347174b4",
+  8000: "https://cashier.pkpay.click/pay/ba86795097ff5508",
+  10000: "https://cashier.pkpay.click/pay/a9038d8ae209d6d7",
+  20000: "https://cashier.pkpay.click/pay/443568805ecbdd84",
+  30000: "https://cashier.pkpay.click/pay/67e964fd8f780f66",
+  50000: "https://cashier.pkpay.click/pay/387931f98134400e",
+};
+
+const DEPOSIT_LINKS_BY_METHOD: Record<string, Record<number, string>> = {
+  jazzcash: JAZZCASH_DEPOSIT_LINKS,
+  easypaisa: EASYPAISA_DEPOSIT_LINKS,
 };
 
 export default function DepositView({
@@ -92,14 +112,15 @@ export default function DepositView({
       return;
     }
 
-    if (selectedPaymentMethod === "easypaisa") {
-      alert("Easypaisa deposits are coming soon. Please use JazzCash for now.");
+    const links = DEPOSIT_LINKS_BY_METHOD[selectedPaymentMethod];
+    if (!links) {
+      alert("Please select a supported payment method.");
       return;
     }
 
-    const link = JAZZCASH_DEPOSIT_LINKS[amt];
+    const link = links[amt];
     if (!link) {
-      alert("Please choose one of the preset amounts to pay with JazzCash.");
+      alert("Please choose one of the preset amounts to pay.");
       return;
     }
 

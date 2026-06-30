@@ -184,66 +184,48 @@ export default function AccountView({
         </div>
       </div>
 
-      {/* Grid Menu — charcoal/orange/gray theme */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <MenuGridCard
+      {/* Menu list — single-column rows, charcoal/orange/gray theme */}
+      <div className="bg-[#1C1C1E] rounded-2xl border border-white/5 shadow-md mb-4 overflow-hidden divide-y divide-white/5">
+        <MenuRow
+          icon={<Mail className="w-5 h-5 text-amber-500" />}
+          iconBg="bg-amber-500/10 border-amber-500/20"
+          title={t("notification")}
+          badge={1}
+        />
+        <MenuRow
           icon={<Gamepad2 className="w-5 h-5 text-blue-400" />}
           iconBg="bg-blue-500/10 border-blue-500/20"
           title={t("gameHistory")}
-          subtitle={t("myGameHistory")}
         />
-        <MenuGridCard
+        <MenuRow
           icon={<ArrowLeftRight className="w-5 h-5 text-emerald-400" />}
           iconBg="bg-emerald-500/10 border-emerald-500/20"
           title={t("transaction")}
-          subtitle={t("myTransactionHistory")}
           onClick={onTransactionClick}
         />
-        <MenuGridCard
+        <MenuRow
+          icon={<BarChart3 className="w-5 h-5 text-blue-400" />}
+          iconBg="bg-blue-500/10 border-blue-500/20"
+          title="Game Statistics"
+          onClick={onStatisticsClick}
+        />
+        <MenuRow
           icon={<Download className="w-5 h-5 text-red-400" />}
           iconBg="bg-red-500/10 border-red-500/20"
           title={t("deposit")}
-          subtitle={t("myDepositHistory")}
           onClick={onDepositClick}
         />
-        <MenuGridCard
+        <MenuRow
           icon={<Upload className="w-5 h-5 text-amber-500" />}
           iconBg="bg-amber-500/10 border-amber-500/20"
           title={t("withdraw")}
-          subtitle={t("myWithdrawHistory")}
           onClick={onWithdrawClick}
         />
       </div>
 
       <div
-        onClick={onStatisticsClick}
-        className="bg-[#1C1C1E] rounded-xl p-4 flex items-center justify-between cursor-pointer border border-white/5 shadow-md mb-3 hover:bg-[#242428] transition-colors group"
-      >
-        <div className="flex items-center gap-3">
-          <div className="bg-blue-500/10 p-2 rounded-xl border border-blue-500/20">
-            <BarChart3 className="w-5 h-5 text-blue-400" />
-          </div>
-          <span className="text-white font-medium text-sm">Game Statistics</span>
-        </div>
-        <ChevronRight className="w-4 h-4 text-gray-600 group-hover:text-gray-400" />
-      </div>
-
-      <div className="bg-[#1C1C1E] rounded-xl p-4 flex items-center justify-between cursor-pointer border border-white/5 shadow-md mb-3 hover:bg-[#242428] transition-colors">
-        <div className="flex items-center gap-3">
-          <div className="bg-amber-500/10 p-2 rounded-xl border border-amber-500/20">
-            <Mail className="w-5 h-5 text-amber-500" />
-          </div>
-          <span className="text-white font-medium text-sm">{t("notification")}</span>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">1</div>
-          <ChevronRight className="w-4 h-4 text-gray-600" />
-        </div>
-      </div>
-
-      <div
         onClick={logout}
-        className="bg-[#1C1C1E] rounded-xl p-4 flex items-center justify-between cursor-pointer border border-red-500/10 shadow-md mb-4 hover:bg-red-950/20 transition-all group"
+        className="bg-[#1C1C1E] rounded-2xl p-4 flex items-center justify-between cursor-pointer border border-red-500/10 shadow-md mb-4 hover:bg-red-950/20 transition-all group"
       >
         <div className="flex items-center gap-3">
           <div className="bg-red-500/10 p-2 rounded-xl border border-red-500/20">
@@ -336,29 +318,36 @@ function ActionBtn({ icon, label, onClick }: { icon: React.ReactNode; label: str
   );
 }
 
-function MenuGridCard({
+function MenuRow({
   icon,
   iconBg,
   title,
-  subtitle,
+  badge,
   onClick,
 }: {
   icon: React.ReactNode;
   iconBg: string;
   title: string;
-  subtitle: string;
+  badge?: number;
   onClick?: () => void;
 }) {
   return (
     <button
       type="button"
-      className="bg-[#1C1C1E] rounded-xl p-3.5 flex items-center gap-3 text-left border border-white/5 shadow-sm hover:bg-[#242428] hover:border-white/10 transition-colors"
+      className="w-full p-4 flex items-center justify-between text-left cursor-pointer hover:bg-[#242428] transition-colors group"
       onClick={onClick}
     >
-      <div className={`p-2.5 rounded-xl border flex-shrink-0 ${iconBg}`}>{icon}</div>
-      <div className="flex flex-col min-w-0">
-        <span className="text-white text-sm font-bold truncate">{title}</span>
-        <span className="text-gray-500 text-[10px] leading-tight mt-0.5 truncate">{subtitle}</span>
+      <div className="flex items-center gap-3 min-w-0">
+        <div className={`p-2 rounded-xl border flex-shrink-0 ${iconBg}`}>{icon}</div>
+        <span className="text-white font-medium text-sm truncate">{title}</span>
+      </div>
+      <div className="flex items-center gap-3 flex-shrink-0">
+        {badge ? (
+          <div className="bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
+            {badge}
+          </div>
+        ) : null}
+        <ChevronRight className="w-4 h-4 text-gray-600 group-hover:text-gray-400" />
       </div>
     </button>
   );
