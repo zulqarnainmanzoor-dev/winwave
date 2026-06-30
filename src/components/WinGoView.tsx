@@ -165,34 +165,52 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
           if (bet.status === "pending" && bet.period === latestResult.period) {
             hasUpdates = true;
             let isWin = false;
+            // Base multiplier applied to the after-tax stake, matching the
+            // advertised "How to play" payouts:
+            //   color full 2x, color partial (green on 5 / red on 0) 1.5x,
+            //   violet 4.5x, exact number 9x, big/small 2x.
+            let multiplier = 0;
+            const resultNumber = latestResult.number;
 
-            if (bet.type === "size" && bet.value === latestResult.size)
-              isWin = true;
-            if (
-              bet.type === "number" &&
-              Number(bet.value) === latestResult.number
-            )
-              isWin = true;
-            if (bet.type === "color") {
-              if (
-                bet.value === "Green" &&
-                (latestResult.color === "green" || latestResult.number === 5)
-              )
+            if (bet.type === "size") {
+              if (bet.value === latestResult.size) {
                 isWin = true;
-              if (
-                bet.value === "Red" &&
-                (latestResult.color === "red" || latestResult.number === 0)
-              )
+                multiplier = 2;
+              }
+            } else if (bet.type === "number") {
+              if (Number(bet.value) === resultNumber) {
                 isWin = true;
-              if (bet.value === "Violet" && latestResult.color === "violet")
-                isWin = true;
+                multiplier = 9;
+              }
+            } else if (bet.type === "color") {
+              if (bet.value === "Green") {
+                if (resultNumber === 5) {
+                  isWin = true;
+                  multiplier = 1.5; // 5 is green+violet -> partial payout
+                } else if (latestResult.color === "green") {
+                  isWin = true;
+                  multiplier = 2;
+                }
+              } else if (bet.value === "Red") {
+                if (resultNumber === 0) {
+                  isWin = true;
+                  multiplier = 1.5; // 0 is red+violet -> partial payout
+                } else if (latestResult.color === "red") {
+                  isWin = true;
+                  multiplier = 2;
+                }
+              } else if (bet.value === "Violet") {
+                if (latestResult.color === "violet") {
+                  isWin = true;
+                  multiplier = 4.5;
+                }
+              }
             }
 
-            // For color and size, win is 1.96 * total amount. (Profit is 96%).
-            // For numbers, typical win is 9 * total amount.
-            const winAmount = isWin
-              ? bet.amount * (bet.type === "number" ? 9 : 1.96)
-              : 0;
+            // amountAfterTax already has the 2% service fee removed.
+            const stakeAfterTax =
+              bet.amountAfterTax != null ? bet.amountAfterTax : bet.amount * 0.98;
+            const winAmount = isWin ? stakeAfterTax * multiplier : 0;
             if (isWin) {
               totalWinAmount += winAmount;
             }
