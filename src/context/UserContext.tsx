@@ -14,7 +14,9 @@ interface UserContextType {
   balance: number;
   setBalance: (balance: number) => void;
   mainWalletBalance: number;
+  setMainWalletBalance: (balance: number) => void;
   thirdPartyWalletBalance: number;
+  totalDeposited: number;
   totalBalance: number;
   transferWallet: (direction: 'to-game' | 'to-main', amount: number) => boolean;
   setThirdPartyWalletBalance: (balance: number) => void;
@@ -231,6 +233,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [thirdPartyWalletBalance, setThirdPartyWalletBalanceState] = useState<number>(
     savedSession?.thirdPartyWalletBalance ?? 0
   );
+  const [totalDeposited, setTotalDeposited] = useState<number>(
+    savedSession?.totalDeposited ?? 0
+  );
   const totalBalance = mainWalletBalance + thirdPartyWalletBalance;
 
   const setMainWalletBalance = (value: number) => {
@@ -362,7 +367,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
     const { data: walletRow } = await supabase
       .from('wallets')
-      .select('main_balance, wagering_required, wagering_completed')
+      .select('main_balance, wagering_required, wagering_completed, total_recharged')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -370,6 +375,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       if (walletRow.main_balance != null) setMainWalletBalanceState(walletRow.main_balance);
       if (walletRow.wagering_required != null) setWageringRequired(walletRow.wagering_required);
       if (walletRow.wagering_completed != null) setWageringCompleted(walletRow.wagering_completed);
+      if (walletRow.total_recharged != null) setTotalDeposited(walletRow.total_recharged);
     }
   }, [uid, applyProfileData]);
 
@@ -390,6 +396,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       balance: totalBalance,
       mainWalletBalance,
       thirdPartyWalletBalance,
+      totalDeposited,
       soundEnabled,
       musicEnabled,
       wageringRequired,
@@ -409,7 +416,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     };
 
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(session));
-  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, displayId, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
+  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, displayId, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, totalDeposited, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
 
   // When a session is restored from storage the uid may be missing; recover it
   // from the Supabase auth session so profile sync can run on load.
@@ -480,6 +487,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setMainWalletBalanceState((prev) => prev + deposit + bonus);
     setWageringRequired((prev) => prev + deposit + bonus);
     setWageringCompleted(0);
+    setTotalDeposited((prev) => prev + deposit);
   };
 
   return (
@@ -491,7 +499,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       balance: totalBalance,
       setBalance,
       mainWalletBalance,
+      setMainWalletBalance,
       thirdPartyWalletBalance,
+      totalDeposited,
       totalBalance,
       transferWallet,
       setThirdPartyWalletBalance,

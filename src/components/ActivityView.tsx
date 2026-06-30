@@ -1,16 +1,36 @@
 import { useState, useEffect } from 'react';
 import { useLanguage } from '../context/LanguageContext';
-import { Award, UserPlus, Coins, Trophy, Gift, Calendar, Check, X, ChevronLeft, Calendar as CalendarIcon } from 'lucide-react';
+import { useUser } from '../context/UserContext';
+import { Award, UserPlus, Coins, Trophy, Gift, Calendar, Check, X, ChevronLeft, Lock, Calendar as CalendarIcon } from 'lucide-react';
+
+const ATTENDANCE_KEY = 'winwave_attendance_claimed';
+
+// Each day unlocks only once the user's cumulative deposit reaches its threshold.
+const days = [
+  { day: 1, reward: 7, requiredDeposit: 500 },
+  { day: 2, reward: 20, requiredDeposit: 2000 },
+  { day: 3, reward: 100, requiredDeposit: 5000 },
+  { day: 4, reward: 200, requiredDeposit: 10000 },
+  { day: 5, reward: 450, requiredDeposit: 30000 },
+  { day: 6, reward: 2400, requiredDeposit: 80000 },
+  { day: 7, reward: 5000, requiredDeposit: 200000 },
+];
 
 export default function ActivityView() {
   const { t } = useLanguage();
+  const { totalDeposited, mainWalletBalance, setMainWalletBalance } = useUser();
   const [isCheckInModalOpen, setIsCheckInModalOpen] = useState(false);
   const [isGiftsModalOpen, setIsGiftsModalOpen] = useState(false);
-  const [checkedInDays, setCheckedInDays] = useState<number[]>([]);
+  const [checkedInDays, setCheckedInDays] = useState<number[]>(() => {
+    try {
+      const stored = localStorage.getItem(ATTENDANCE_KEY);
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
   const [giftCode, setGiftCode] = useState('');
   const [toastMsg, setToastMsg] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
-  
-  const currentDay = 3;
 
   useEffect(() => {
     if (toastMsg) {
@@ -19,10 +39,31 @@ export default function ActivityView() {
     }
   }, [toastMsg]);
 
+  const claimedReward = checkedInDays.reduce((sum, day) => {
+    const cfg = days.find((d) => d.day === day);
+    return sum + (cfg ? cfg.reward : 0);
+  }, 0);
+
   const handleCheckIn = (day: number) => {
-    if (!checkedInDays.includes(day) && day <= currentDay) {
-      setCheckedInDays([...checkedInDays, day]);
+    if (checkedInDays.includes(day)) return;
+    const cfg = days.find((d) => d.day === day);
+    if (!cfg) return;
+    if (totalDeposited < cfg.requiredDeposit) {
+      setToastMsg({
+        msg: `Deposit Rs.${cfg.requiredDeposit.toLocaleString('en-US')} in total to unlock Day ${day}`,
+        type: 'error',
+      });
+      return;
     }
+    const updated = [...checkedInDays, day];
+    setCheckedInDays(updated);
+    setMainWalletBalance(mainWalletBalance + cfg.reward);
+    try {
+      localStorage.setItem(ATTENDANCE_KEY, JSON.stringify(updated));
+    } catch {
+      /* ignore */
+    }
+    setToastMsg({ msg: `Rs.${cfg.reward.toLocaleString('en-US')} credited to your balance`, type: 'success' });
   };
 
   const handleRedeemGift = () => {
@@ -36,16 +77,6 @@ export default function ActivityView() {
       setToastMsg({ msg: t('codeInvalid'), type: 'error' });
     }
   };
-
-  const days = [
-    { day: 1, reward: "Rs.7.00" },
-    { day: 2, reward: "Rs.20.00" },
-    { day: 3, reward: "Rs.100.00" },
-    { day: 4, reward: "Rs.200.00" },
-    { day: 5, reward: "Rs.450.00" },
-    { day: 6, reward: "Rs.2,400.00" },
-    { day: 7, reward: "Rs.5,000.00" },
-  ];
 
   return (
     <div className="flex-1 flex flex-col bg-[#1A1A1D] animate-slide-up pb-[100px] overflow-y-auto relative z-10">
@@ -139,7 +170,7 @@ export default function ActivityView() {
                 
                 <div className="mb-4">
                   <p className="text-white/90 text-xs mb-0.5">Accumulated</p>
-                  <p className="text-white font-bold text-xl">Rs.{(checkedInDays.length * 10).toFixed(2)}</p>
+                  <p className="text-white font-bold text-xl">Rs.{claimedReward.toFixed(2)}</p>
                 </div>
                 
                 <div className="flex gap-4">
@@ -161,26 +192,34 @@ export default function ActivityView() {
             <div className="p-4 grid grid-cols-3 gap-3">
               {days.map((d) => {
                 const isClaimed = checkedInDays.includes(d.day);
-                
+                const isFinal = d.day === days.length;
+                const isUnlocked = totalDeposited >= d.requiredDeposit;
+                const iconSrc = isFinal ? "/assets/svg/Gift Box.png" : "/assets/svg/Coins.png";
+
                 return (
-                  <div 
+                  <div
                     key={d.day}
                     onClick={() => handleCheckIn(d.day)}
-                    className="bg-[#2B2735] rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer border border-white/5 hover:bg-[#332f3d] transition-colors shadow-md"
+                    className={`bg-[#2B2735] rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer border transition-colors shadow-md ${isClaimed ? 'border-green-500/40' : isUnlocked ? 'border-amber-500/40 hover:bg-[#332f3d]' : 'border-white/5 opacity-70 hover:bg-[#332f3d]'}`}
                   >
-                    <span className="text-white text-xs font-bold mb-2">{d.reward}</span>
+                    <span className="text-white text-xs font-bold mb-2">Rs.{d.reward.toLocaleString('en-US')}.00</span>
                     <div className="w-12 h-12 mb-2 relative">
-                       <img src="/assets/gameCategories/Popular.webp" alt="Coin" className="w-full h-full object-contain" onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} />
+                       <img src={iconSrc} alt={isFinal ? "Gift Box" : "Coins"} className="w-full h-full object-contain" onError={(e) => { e.currentTarget.style.display='none'; e.currentTarget.nextElementSibling?.classList.remove('hidden'); }} />
                        <div className="absolute inset-0 bg-[#F59E0B] rounded-full hidden flex items-center justify-center border-4 border-[#FBBF24] shadow-inner">
-                         <Award className="w-6 h-6 text-white" />
+                         {isFinal ? <Gift className="w-6 h-6 text-white" /> : <Award className="w-6 h-6 text-white" />}
                        </div>
-                       {isClaimed && (
+                       {isClaimed ? (
                          <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center">
                            <Check className="text-green-500 w-8 h-8" strokeWidth={3} />
                          </div>
-                       )}
+                       ) : !isUnlocked ? (
+                         <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center">
+                           <Lock className="text-amber-400 w-6 h-6" />
+                         </div>
+                       ) : null}
                     </div>
                     <span className="text-gray-400 text-[11px]">{d.day} Day</span>
+                    <span className="text-[9px] text-gray-500 mt-0.5 text-center leading-tight">Dep Rs.{d.requiredDeposit.toLocaleString('en-US')}</span>
                   </div>
                 );
               })}
