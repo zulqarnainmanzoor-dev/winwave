@@ -60,10 +60,8 @@ import { useLanguage } from './context/LanguageContext';
 
 import { useUser } from './context/UserContext';
 
-import AdminLogin from './admin/AdminLogin';
-
+import AdminLogin from './admin/pages/AdminLogin';
 import { AdminDashboard as AdminPanel } from './admin/AdminDashboard';
-
 
 
 export default function App() {

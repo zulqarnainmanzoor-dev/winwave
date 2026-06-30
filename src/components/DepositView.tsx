@@ -323,7 +323,10 @@ export default function DepositView({
 
       {/* Pay Now Button */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-[#08101f] backdrop-blur-sm z-50 border-t border-white/10">
-        <button className="w-full bg-[#2563eb] text-white font-bold text-lg py-3.5 rounded-full shadow-lg shadow-[#2563eb]/30 hover:bg-[#1d4ed8] transition-all">
+          <button
+          onClick={handlePayNow}
+          className="w-full bg-[#2563eb] text-white font-bold text-lg py-3.5 rounded-full shadow-lg shadow-[#2563eb]/30 hover:bg-[#1d4ed8] transition-all"
+          >
           Pay now
         </button>
       </div>
