@@ -220,7 +220,6 @@ export function Settings() {
               <div className="bg-[#0f3460] rounded-lg p-4 mt-6">
                 <p className="text-gray-400 text-sm mb-2">API Key</p>
                 <p className="text-gray-300 font-mono text-xs break-all bg-[#1a1a2e] px-3 py-2 rounded">
-                  sk_live_51Hx7x2Wy8q9z0b1c2d3e4f5g6h7i8j9k0l
                 </p>
               </div>
             </div>
