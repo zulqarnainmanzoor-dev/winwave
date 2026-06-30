@@ -13,6 +13,9 @@ import {
   ChevronUp,
   CheckCircle,
   Copy,
+  Rocket,
+  X,
+  Check,
 } from "lucide-react";
 import { useUser } from "../context/UserContext";
 import { useLanguage } from "../context/LanguageContext";
@@ -165,34 +168,52 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
           if (bet.status === "pending" && bet.period === latestResult.period) {
             hasUpdates = true;
             let isWin = false;
+            // Base multiplier applied to the after-tax stake, matching the
+            // advertised "How to play" payouts:
+            //   color full 2x, color partial (green on 5 / red on 0) 1.5x,
+            //   violet 4.5x, exact number 9x, big/small 2x.
+            let multiplier = 0;
+            const resultNumber = latestResult.number;
 
-            if (bet.type === "size" && bet.value === latestResult.size)
-              isWin = true;
-            if (
-              bet.type === "number" &&
-              Number(bet.value) === latestResult.number
-            )
-              isWin = true;
-            if (bet.type === "color") {
-              if (
-                bet.value === "Green" &&
-                (latestResult.color === "green" || latestResult.number === 5)
-              )
+            if (bet.type === "size") {
+              if (bet.value === latestResult.size) {
                 isWin = true;
-              if (
-                bet.value === "Red" &&
-                (latestResult.color === "red" || latestResult.number === 0)
-              )
+                multiplier = 2;
+              }
+            } else if (bet.type === "number") {
+              if (Number(bet.value) === resultNumber) {
                 isWin = true;
-              if (bet.value === "Violet" && latestResult.color === "violet")
-                isWin = true;
+                multiplier = 9;
+              }
+            } else if (bet.type === "color") {
+              if (bet.value === "Green") {
+                if (resultNumber === 5) {
+                  isWin = true;
+                  multiplier = 1.5; // 5 is green+violet -> partial payout
+                } else if (latestResult.color === "green") {
+                  isWin = true;
+                  multiplier = 2;
+                }
+              } else if (bet.value === "Red") {
+                if (resultNumber === 0) {
+                  isWin = true;
+                  multiplier = 1.5; // 0 is red+violet -> partial payout
+                } else if (latestResult.color === "red") {
+                  isWin = true;
+                  multiplier = 2;
+                }
+              } else if (bet.value === "Violet") {
+                if (latestResult.color === "violet") {
+                  isWin = true;
+                  multiplier = 4.5;
+                }
+              }
             }
 
-            // For color and size, win is 1.96 * total amount. (Profit is 96%).
-            // For numbers, typical win is 9 * total amount.
-            const winAmount = isWin
-              ? bet.amount * (bet.type === "number" ? 9 : 1.96)
-              : 0;
+            // amountAfterTax already has the 2% service fee removed.
+            const stakeAfterTax =
+              bet.amountAfterTax != null ? bet.amountAfterTax : bet.amount * 0.98;
+            const winAmount = isWin ? stakeAfterTax * multiplier : 0;
             if (isWin) {
               totalWinAmount += winAmount;
             }
@@ -229,6 +250,13 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
       });
     }
   }, [history, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance]);
+
+  // Auto-close the result popup after 3 seconds (matches reference design)
+  useEffect(() => {
+    if (!resultPopup) return;
+    const timer = window.setTimeout(() => setResultPopup(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [resultPopup]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -1248,79 +1276,101 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
             </div>
           </div>
         )}
-        {/* Result Popup */}
+        {/* Result Popup — Win (Congratulations) / Loss (Sorry) */}
         {resultPopup && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
-              <div
-                className={`p-6 text-center ${resultPopup.isWin ? "bg-gradient-to-br from-[#2ed573] to-green-600" : "bg-gradient-to-br from-gray-500 to-gray-700"}`}
-              >
-                <h2 className="text-white text-3xl font-bold uppercase tracking-wider mb-2">
-                  {resultPopup.isWin ? "WINNER" : "SORRY"}
-                </h2>
-                <p className="text-white/80 font-medium">
-                  Period: {resultPopup.period}
-                </p>
+            <div className="relative w-full max-w-[20rem] flex flex-col items-center animate-in zoom-in-95 duration-300">
+              {/* Rocket badge with wings + ribbon */}
+              <div className="relative z-10 flex justify-center -mb-9">
+                {/* wings */}
+                <span
+                  className={`absolute top-5 left-1 w-14 h-7 rounded-full blur-[1px] -rotate-12 ${resultPopup.isWin ? "bg-gradient-to-l from-amber-200 to-orange-300" : "bg-gradient-to-l from-slate-100 to-slate-300"}`}
+                />
+                <span
+                  className={`absolute top-5 right-1 w-14 h-7 rounded-full blur-[1px] rotate-12 ${resultPopup.isWin ? "bg-gradient-to-r from-amber-200 to-orange-300" : "bg-gradient-to-r from-slate-100 to-slate-300"}`}
+                />
+                {/* coin */}
+                <div
+                  className={`relative w-[72px] h-[72px] rounded-full flex items-center justify-center border-4 shadow-lg ${resultPopup.isWin ? "bg-gradient-to-br from-amber-300 to-orange-500 border-amber-200" : "bg-gradient-to-br from-slate-200 to-slate-400 border-white/70"}`}
+                >
+                  <Rocket
+                    className={`w-9 h-9 ${resultPopup.isWin ? "text-white" : "text-slate-500"}`}
+                    fill="currentColor"
+                  />
+                </div>
               </div>
 
-              <div className="p-6 bg-white text-center flex flex-col items-center">
-                <div className="flex gap-2 justify-center items-center mb-6">
-                  <span className="text-gray-500 font-medium">Result:</span>
-                  <div className="flex gap-1 items-center font-bold">
-                    <span className="text-gray-800 text-lg">
-                      {resultPopup.resultNumber}
-                    </span>
-                    <span
-                      className={
-                        resultPopup.resultColor === "red"
-                          ? "text-[#ff4757]"
-                          : resultPopup.resultColor === "green"
-                            ? "text-[#2ed573]"
-                            : "text-[#9c27b0]"
-                      }
-                    >
-                      {resultPopup.resultColor.charAt(0).toUpperCase() +
-                        resultPopup.resultColor.slice(1)}
-                    </span>
-                    <span
-                      className={
-                        resultPopup.resultSize === "Big"
-                          ? "text-[#fba846]"
-                          : "text-[#5c9df5]"
-                      }
-                    >
-                      {resultPopup.resultSize}
-                    </span>
-                  </div>
+              {/* Card */}
+              <div
+                className={`relative w-full rounded-[1.75rem] pt-12 pb-6 px-5 text-center shadow-2xl ${resultPopup.isWin ? "bg-gradient-to-b from-[#ff7a45] to-[#f5402c]" : "bg-gradient-to-b from-[#cfd8e4] to-[#9fb0c6]"}`}
+              >
+                <h2
+                  className={`text-3xl font-extrabold mb-4 ${resultPopup.isWin ? "text-white" : "text-slate-600"}`}
+                >
+                  {resultPopup.isWin ? "Congratulations" : "Sorry"}
+                </h2>
+
+                {/* Lottery results pills */}
+                <div className="flex items-center justify-center gap-2 mb-5">
+                  <span
+                    className={`text-sm font-medium ${resultPopup.isWin ? "text-white/90" : "text-slate-600"}`}
+                  >
+                    Lottery results
+                  </span>
+                  <span className="px-3 py-0.5 rounded-full bg-white/90 text-xs font-bold capitalize text-[#f5402c]">
+                    {resultPopup.resultColor}
+                  </span>
+                  <span className="w-6 h-6 rounded-full bg-white/90 text-xs font-bold text-[#f5402c] flex items-center justify-center">
+                    {resultPopup.resultNumber}
+                  </span>
+                  <span className="px-3 py-0.5 rounded-full bg-white/90 text-xs font-bold text-[#f5402c]">
+                    {resultPopup.resultSize}
+                  </span>
                 </div>
 
-                {resultPopup.isWin ? (
-                  <div className="flex flex-col items-center gap-1 mb-6">
-                    <span className="text-gray-500">Bonus</span>
-                    <span className="text-3xl font-bold text-[#2ed573]">
-                      +{resultPopup.winAmount.toFixed(2)}
-                    </span>
-                    <span className="text-sm text-gray-400">
-                      Profit: +
-                      {(resultPopup.winAmount - resultPopup.amount).toFixed(2)}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-1 mb-6">
-                    <span className="text-gray-500">Loss</span>
-                    <span className="text-3xl font-bold text-gray-500">
-                      -{resultPopup.amount.toFixed(2)}
-                    </span>
-                  </div>
-                )}
+                {/* Receipt */}
+                <div className="relative bg-white rounded-lg px-4 py-4 shadow-inner [clip-path:polygon(0_8%,100%_0,100%_92%,0_100%)]">
+                  {resultPopup.isWin ? (
+                    <>
+                      <p className="text-[#f5402c] font-bold text-sm">Bonus</p>
+                      <p className="text-[#f5402c] text-2xl font-extrabold leading-tight">
+                        Rs{resultPopup.winAmount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-slate-500 text-2xl font-extrabold leading-tight">
+                      -Loss
+                    </p>
+                  )}
+                  <p className="text-gray-400 text-[11px] mt-1">
+                    Period: {resultPopup.tab}
+                  </p>
+                  <p className="text-gray-400 text-[11px]">
+                    {resultPopup.period}
+                  </p>
+                </div>
 
-                <button
-                  onClick={() => setResultPopup(null)}
-                  className="w-full bg-[#1A1A1D] text-white font-bold py-3 rounded-xl hover:bg-black transition-colors"
-                >
-                  Close
-                </button>
+                {/* auto close note */}
+                <div className="flex items-center justify-center gap-1.5 mt-4">
+                  <Check
+                    className={`w-4 h-4 ${resultPopup.isWin ? "text-white" : "text-slate-500"}`}
+                  />
+                  <span
+                    className={`text-xs ${resultPopup.isWin ? "text-white/90" : "text-slate-500"}`}
+                  >
+                    3 seconds auto close
+                  </span>
+                </div>
               </div>
+
+              {/* Close button */}
+              <button
+                onClick={() => setResultPopup(null)}
+                aria-label="Close"
+                className="mt-5 w-11 h-11 rounded-full border-2 border-white/80 flex items-center justify-center text-white hover:bg-white/10 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
           </div>
         )}

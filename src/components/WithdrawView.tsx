@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ChevronLeft,
   HeadphonesIcon,
@@ -11,9 +11,11 @@ import {
   Lock,
   Shield,
   ShieldCheck,
-  KeyRound
+  KeyRound,
+  Trash2
 } from "lucide-react";
 import { useUser, PAYMENT_LIMITS } from "../context/UserContext";
+import { useUserBanks } from "../hooks/useUserBanks";
 
 export default function WithdrawView({
   onBack,
@@ -22,7 +24,8 @@ export default function WithdrawView({
   onBack: () => void;
   onTransactionClick: () => void;
 }) {
-  const { mainWalletBalance, thirdPartyWalletBalance, totalBalance, setBalance, wageringRequired, wageringCompleted, selectedPaymentMethod, setSelectedPaymentMethod, withdrawalPassword, setWithdrawalPassword: setWithdrawalPasswordContext, boundAccounts, setBoundAccounts } = useUser();
+  const { uid, mainWalletBalance, thirdPartyWalletBalance, totalBalance, setBalance, wageringRequired, wageringCompleted, selectedPaymentMethod, setSelectedPaymentMethod, withdrawalPassword, setWithdrawalPassword: setWithdrawalPasswordContext, setBoundAccounts } = useUser();
+  const { boundAccounts, addBank, removeBank } = useUserBanks(uid);
   const [amount, setAmount] = useState<string>("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -31,8 +34,9 @@ export default function WithdrawView({
 
   // 6-digit withdrawal password states - local editing buffer only
   const [isNumpadOpen, setIsNumpadOpen] = useState(false);
-  const [numpadPurpose, setNumpadPurpose] = useState<"setup" | "confirm" | "verify">("setup");
+  const [numpadPurpose, setNumpadPurpose] = useState<"setup" | "confirm" | "verify" | "remove">("setup");
   const [numpadBuffer, setNumpadBuffer] = useState("");
+  const [removeTargetId, setRemoveTargetId] = useState<string | null>(null);
   const [setupPasswordBuffer, setSetupPasswordBuffer] = useState("");
   const [showPasswordSetupSuccess, setShowPasswordSetupSuccess] = useState(false);
 
@@ -55,7 +59,33 @@ export default function WithdrawView({
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
+  // Keep the global context in sync with the database-backed accounts so the
+  // rest of the app and the persisted session reflect the source of truth.
+  useEffect(() => {
+    setBoundAccounts(boundAccounts);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boundAccounts]);
+
   const activeWallet = boundAccounts[selectedPaymentMethod];
+
+  const doRemoveAccount = async (id: string) => {
+    const result = await removeBank(id);
+    if (!result.ok) {
+      alert(result.error);
+    }
+  };
+
+  const handleRemoveClick = () => {
+    if (!activeWallet) return;
+    if (!withdrawalPassword) {
+      alert("Please set up your 6-digit security PIN before removing an account.");
+      return;
+    }
+    setRemoveTargetId(activeWallet.id);
+    setNumpadPurpose("remove");
+    setNumpadBuffer("");
+    setIsNumpadOpen(true);
+  };
 
   const limits = PAYMENT_LIMITS;
 
@@ -95,6 +125,19 @@ export default function WithdrawView({
             handleWithdraw();
           } else {
             alert("Incorrect 6-digit withdrawal password! Please try again.");
+            setNumpadBuffer("");
+          }
+        } else if (numpadPurpose === "remove") {
+          if (newVal === withdrawalPassword) {
+            setIsNumpadOpen(false);
+            setNumpadBuffer("");
+            const targetId = removeTargetId;
+            setRemoveTargetId(null);
+            if (targetId) {
+              void doRemoveAccount(targetId);
+            }
+          } else {
+            alert("Incorrect 6-digit PIN! Please try again.");
             setNumpadBuffer("");
           }
         }
@@ -167,23 +210,25 @@ export default function WithdrawView({
     }
   };
 
-  const handleAddWallet = (e: React.FormEvent) => {
+  const handleAddWallet = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newWalletName.trim() || !newWalletAccount.trim()) {
       alert("Please fill in all fields correctly.");
       return;
     }
-    
-    // Bind the account for the current selected method
-    setBoundAccounts((prev) => ({
-      ...prev,
-      [selectedPaymentMethod]: {
-        name: newWalletName.trim(),
-        account: newWalletAccount.trim(),
-        remarks: newWalletRemarks.trim() || undefined,
-        ...(selectedPaymentMethod === "usdt" ? { network: usdtNetwork } : {}),
-      } as any,
-    }));
+
+    const result = await addBank({
+      method_type: selectedPaymentMethod,
+      account_name: newWalletName.trim(),
+      account_number: newWalletAccount.trim(),
+      remarks: newWalletRemarks.trim() || undefined,
+    });
+
+    if (!result.ok) {
+      alert(result.error);
+      return;
+    }
+
     setNewWalletName("");
     setNewWalletAccount("");
     setNewWalletRemarks("");
@@ -446,26 +491,6 @@ export default function WithdrawView({
               )}
             </div>
 
-            <div
-              onClick={() => setSelectedPaymentMethod("usdt")}
-              className={`flex-1 min-w-[100px] relative flex flex-col items-center justify-center p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                selectedPaymentMethod === "usdt"
-                  ? "border-[#ffa502] bg-white shadow-sm"
-                  : "border-transparent bg-white shadow-sm opacity-80"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <div className="bg-[#26a17b] rounded-full w-7 h-7 flex items-center justify-center text-white font-bold text-xs">
-                  ₮
-                </div>
-                <span className="font-bold text-xs text-gray-800">USDT</span>
-              </div>
-              {selectedPaymentMethod === "usdt" && (
-                <div className="absolute -bottom-0 -right-0 bg-[#ffa502] rounded-tl-lg rounded-br-sm w-4 h-4 flex items-center justify-center">
-                  <Check className="w-3 h-3 text-white" strokeWidth={3} />
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
@@ -490,9 +515,19 @@ export default function WithdrawView({
                   <p className="text-gray-500 text-xs font-mono">{activeWallet.account}</p>
                 </div>
               </div>
-              <span className="text-green-600 bg-green-50 font-bold text-[10px] px-2.5 py-1 rounded-full border border-green-200">
-                Bound securely
-              </span>
+              <div className="flex flex-col items-end gap-1.5">
+                <span className="text-green-600 bg-green-50 font-bold text-[10px] px-2.5 py-1 rounded-full border border-green-200">
+                  Bound securely
+                </span>
+                <button
+                  type="button"
+                  onClick={handleRemoveClick}
+                  className="flex items-center gap-1 text-red-500 hover:text-red-600 font-bold text-[10px] cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  Remove
+                </button>
+              </div>
             </div>
           ) : (
             <div
@@ -797,11 +832,13 @@ export default function WithdrawView({
                 {numpadPurpose === "setup" && "Set Withdrawal Password"}
                 {numpadPurpose === "confirm" && "Confirm Withdrawal Password"}
                 {numpadPurpose === "verify" && "Enter Withdrawal Password"}
+                {numpadPurpose === "remove" && "Confirm Account Removal"}
               </h3>
               <p className="text-xs text-gray-400 mt-1 max-w-[250px]">
                 {numpadPurpose === "setup" && "Create a secure 6-digit password to authorize withdrawals."}
                 {numpadPurpose === "confirm" && "Please enter the same 6-digit password to confirm."}
                 {numpadPurpose === "verify" && "Enter your 6-digit security PIN to authorize transaction."}
+                {numpadPurpose === "remove" && "Enter your 6-digit security PIN to remove this account."}
               </p>
             </div>
 

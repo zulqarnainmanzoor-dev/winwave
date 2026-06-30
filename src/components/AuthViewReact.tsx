@@ -16,7 +16,7 @@ interface AuthViewProps {
   onLoginSuccess: (
     phoneNumber: string,
     userId?: string,
-    profile?: { referral_code?: string },
+    profile?: { invite_code?: string; phone?: string },
     wallet?: { main_balance?: number; wagering_required?: number }
   ) => void;
   initialMode?: "login" | "register";
@@ -138,7 +138,7 @@ export default function AuthView({
         onLoginSuccess(
           normalizedPhone,
           data.user?.id || normalizedPhone,
-          data.user,
+          undefined,
           undefined
         );
       }

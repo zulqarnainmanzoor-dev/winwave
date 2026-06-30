@@ -7,13 +7,16 @@ interface UserContextType {
   avatar: string;
   setAvatar: (avatar: string) => void;
   uid: string;
+  displayId: string;
   phoneNumber: string;
   setPhoneNumber: (phone: string) => void;
   lastLogin: string;
   balance: number;
   setBalance: (balance: number) => void;
   mainWalletBalance: number;
+  setMainWalletBalance: (balance: number) => void;
   thirdPartyWalletBalance: number;
+  totalDeposited: number;
   totalBalance: number;
   transferWallet: (direction: 'to-game' | 'to-main', amount: number) => boolean;
   setThirdPartyWalletBalance: (balance: number) => void;
@@ -45,7 +48,7 @@ interface UserContextType {
   login: (
     phoneNumber: string,
     userId?: string,
-    profile?: { referral_code?: string; phone_number?: string },
+    profile?: { invite_code?: string; phone?: string },
     wallet?: { main_balance?: number; wagering_required?: number }
   ) => void;
   logout: () => void;
@@ -99,8 +102,10 @@ export function formatDisplayUid(uid: string): string {
 
 export type ProfileRow = {
   vip_level?: number | null;
-  progress?: number | null;
-  wagered_amount?: number | null;
+  username?: string | null;
+  withdrawal_pin?: string | number | null;
+  balance?: number | null;
+  invite_code?: string | null;
 };
 
 export function computeVipProgress(vipLevel: number, wageredAmount: number): number {
@@ -167,6 +172,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const savedSession = readStoredSession();
 
   const [uid, setUid] = useState(savedSession?.uid || '');
+  const [displayId, setDisplayId] = useState(savedSession?.displayId || savedSession?.referralCode || '');
   const [username, setUsername] = useState(savedSession?.username || '');
   const [avatar, setAvatar] = useState(savedSession?.avatar || '/assets/avatar/Avatar 1.webp');
   const [soundEnabled, setSoundEnabled] = useState(savedSession?.soundEnabled ?? true);
@@ -227,6 +233,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [thirdPartyWalletBalance, setThirdPartyWalletBalanceState] = useState<number>(
     savedSession?.thirdPartyWalletBalance ?? 0
   );
+  const [totalDeposited, setTotalDeposited] = useState<number>(
+    savedSession?.totalDeposited ?? 0
+  );
   const totalBalance = mainWalletBalance + thirdPartyWalletBalance;
 
   const setMainWalletBalance = (value: number) => {
@@ -263,15 +272,16 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const login = (
     phoneNumberValue: string,
     userId?: string,
-    profile?: { referral_code?: string; phone_number?: string },
+    profile?: { invite_code?: string; phone?: string },
     wallet?: { main_balance?: number; wagering_required?: number }
   ) => {
     const suffix = phoneNumberValue.substring(Math.max(0, phoneNumberValue.length - 4));
     setUid(userId || '');
-    setPhoneNumber(profile?.phone_number || phoneNumberValue);
+    setPhoneNumber(profile?.phone || phoneNumberValue);
     setUsername(`MEMBER_${suffix}`);
-    if (profile?.referral_code) {
-      setReferralCode(profile.referral_code);
+    if (profile?.invite_code) {
+      setReferralCode(profile.invite_code);
+      setDisplayId(profile.invite_code);
     }
     if (wallet?.main_balance !== undefined) {
       setMainWalletBalanceState(wallet.main_balance);
@@ -306,36 +316,24 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   };
 
   const applyProfileData = useCallback((profile: ProfileRow) => {
-    const level = profile.vip_level;
-    const wagered = profile.wagered_amount;
+    // Profile identity fields are sourced from the database, not local storage.
+    if (profile.username) {
+      setUsername(profile.username);
+    }
+    if (profile.withdrawal_pin != null) {
+      setWithdrawalPasswordState(String(profile.withdrawal_pin));
+    }
+    if (profile.invite_code) {
+      setReferralCode(profile.invite_code);
+      setDisplayId(profile.invite_code);
+    }
+    if (profile.balance != null) {
+      setMainWalletBalanceState(profile.balance);
+    }
 
+    const level = profile.vip_level;
     if (level != null) {
       setVipLevelState(level);
-    }
-    if (wagered != null) {
-      setCumulativeWagerState(wagered);
-      localStorage.setItem("cumulative_wager", wagered.toString());
-    }
-
-    if (profile.progress != null) {
-      setVipProgressState(Math.min(100, Math.max(0, profile.progress)));
-      return;
-    }
-
-    if (wagered != null && level != null) {
-      setVipProgressState(computeVipProgress(level, wagered));
-      return;
-    }
-
-    if (wagered != null) {
-      setVipLevelState((currentLevel) => {
-        setVipProgressState(computeVipProgress(currentLevel, wagered));
-        return currentLevel;
-      });
-      return;
-    }
-
-    if (level != null) {
       setCumulativeWagerState((currentWager) => {
         setVipProgressState(computeVipProgress(level, currentWager));
         return currentWager;
@@ -354,7 +352,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
     const { data, error } = await supabase
       .from('profiles')
-      .select('vip_level, progress, wagered_amount')
+      .select('vip_level, username, withdrawal_pin, balance, invite_code')
       .eq('id', userId)
       .maybeSingle();
 
@@ -365,6 +363,19 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
     if (data) {
       applyProfileData(data);
+    }
+
+    const { data: walletRow } = await supabase
+      .from('wallets')
+      .select('main_balance, wagering_required, wagering_completed, total_recharged')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (walletRow) {
+      if (walletRow.main_balance != null) setMainWalletBalanceState(walletRow.main_balance);
+      if (walletRow.wagering_required != null) setWageringRequired(walletRow.wagering_required);
+      if (walletRow.wagering_completed != null) setWageringCompleted(walletRow.wagering_completed);
+      if (walletRow.total_recharged != null) setTotalDeposited(walletRow.total_recharged);
     }
   }, [uid, applyProfileData]);
 
@@ -377,12 +388,15 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
 
     const session = {
+      uid,
+      displayId,
       phoneNumber,
       username,
       avatar,
       balance: totalBalance,
       mainWalletBalance,
       thirdPartyWalletBalance,
+      totalDeposited,
       soundEnabled,
       musicEnabled,
       wageringRequired,
@@ -402,7 +416,22 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     };
 
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(session));
-  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
+  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, displayId, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, totalDeposited, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
+
+  // When a session is restored from storage the uid may be missing; recover it
+  // from the Supabase auth session so profile sync can run on load.
+  useEffect(() => {
+    if (!isLoggedIn || uid) return;
+    let cancelled = false;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const recovered = session?.user?.id ?? '';
+      if (!cancelled && recovered) setUid(recovered);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, uid]);
 
   useEffect(() => {
     if (!isLoggedIn || !uid) return;
@@ -458,18 +487,21 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setMainWalletBalanceState((prev) => prev + deposit + bonus);
     setWageringRequired((prev) => prev + deposit + bonus);
     setWageringCompleted(0);
+    setTotalDeposited((prev) => prev + deposit);
   };
 
   return (
     <UserContext.Provider value={{ 
       username, setUsername, 
       avatar, setAvatar, 
-      uid, phoneNumber, setPhoneNumber,
+      uid, displayId, phoneNumber, setPhoneNumber,
       lastLogin,
       balance: totalBalance,
       setBalance,
       mainWalletBalance,
+      setMainWalletBalance,
       thirdPartyWalletBalance,
+      totalDeposited,
       totalBalance,
       transferWallet,
       setThirdPartyWalletBalance,

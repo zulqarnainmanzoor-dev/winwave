@@ -3,8 +3,8 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import apiRouter from '../backend/api/api';
-import adminRouter from '../backend/admin/admin';
+import apiRouter from './api';
+import adminRouter from '../admin/admin';
 
 const app = express();
 const adminSecret = process.env.ADMIN_SECRET_ID || '3399944';

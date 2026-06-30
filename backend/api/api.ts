@@ -2,12 +2,14 @@ import { Router } from 'express';
 import { supabase } from '../database/db';
 import registerRouter from './register';
 import membersRouter from './members';
+import webhookRouter from './webhook';
 import { getDeviceContext, logSecurityEvent } from './security';
 
 const router = Router();
 
 router.use('/', registerRouter);
 router.use('/members', membersRouter);
+router.use('/webhook', webhookRouter);
 
 router.post('/login', async (req, res) => {
   const { phone, password } = req.body;
@@ -26,7 +28,7 @@ router.post('/login', async (req, res) => {
 
   try {
     const { data, error } = await supabase.auth.signInWithPassword({
-      phone: normalizedPhone,
+      email: `${normalizedPhone}@winwave.com`,
       password,
     });
 
@@ -37,7 +39,7 @@ router.post('/login', async (req, res) => {
 
     const userId = data.user.id;
     const [{ data: profileData, error: profileError }, { data: walletData, error: walletError }] = await Promise.all([
-      supabase.from('profiles').select('phone_number, referral_code').eq('id', userId).maybeSingle(),
+      supabase.from('profiles').select('phone, invite_code').eq('id', userId).maybeSingle(),
       supabase.from('wallets').select('main_balance, wagering_required').eq('user_id', userId).maybeSingle(),
     ]);
 
@@ -54,8 +56,8 @@ router.post('/login', async (req, res) => {
       user: {
         id: userId,
         email: data.user.email ?? '',
-        phone_number: profileData?.phone_number || normalizedPhone,
-        referral_code: profileData?.referral_code || '',
+        phone: profileData?.phone || normalizedPhone,
+        invite_code: profileData?.invite_code || '',
       },
       wallet: {
         main_balance: walletData?.main_balance ?? 0,

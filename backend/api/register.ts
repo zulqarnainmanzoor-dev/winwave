@@ -23,6 +23,33 @@ const isAbuseGuardFailure = (result: AbuseGuardResult): result is AbuseGuardFail
 
 const normalizePhone = (phone: string) => (phone || '').replace(/\D/g, '');
 
+// Public, user-facing display id: a random 6-digit numeric code (e.g. "634079").
+// The internal uuid (profiles.id) remains the source of truth for DB relations.
+const randomDisplayId = (digits = 6): string => {
+  const min = 10 ** (digits - 1);
+  const max = 10 ** digits - 1;
+  return String(Math.floor(min + Math.random() * (max - min + 1)));
+};
+
+// Generates a 6-digit numeric display id and verifies it is not already taken,
+// retrying a few times to avoid collisions; widens to 8 digits as a fallback.
+const generateUniqueDisplayId = async (): Promise<string> => {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = randomDisplayId();
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('invite_code', candidate)
+      .maybeSingle();
+    if (error) {
+      // On lookup failure, fall back to a higher-entropy id rather than blocking.
+      return randomDisplayId(8);
+    }
+    if (!data) return candidate;
+  }
+  return randomDisplayId(8);
+};
+
 // NOTE: This is a minimal guard for phone uniqueness.
 // It logs registration attempts but does not block repeated device/IP attempts.
 const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuardResult> => {
@@ -30,7 +57,7 @@ const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuard
   const { data: existingProfiles, error: existingProfilesErr } = await supabase
     .from('profiles')
     .select('id')
-    .eq('phone_number', phone)
+    .eq('phone', phone)
     .limit(1);
 
   if (existingProfilesErr) throw existingProfilesErr;
@@ -72,80 +99,10 @@ router.post('/register', async (req, res) => {
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'Invalid password' });
 
     const cleanPhone = phone.trim();
-    const dummyEmail = `u_${cleanPhone}@winwave.com`;
-    
-    // ... (Referrer ID logic waisa hi rahe)
-    let referrerId: string | null = null;
-    // ... (Keep your existing Referrer lookup logic here)
+    const dummyEmail = `${cleanPhone}@winwave.com`;
 
-    const context = getDeviceContext(req, body);
-    const guard = await enforceAbuseGuards(context.ip, phone);
-    if (!guard.ok && isAbuseGuardFailure(guard)) {
-       return res.status(409).json({ ok: false, error: 'Phone already registered' });
-    }
-
-    // 1. Auth Creation
-    const serviceRoleAvailable = isServiceRoleKey();
-    let authData: any;
-    let authError: any;
-
-    if (serviceRoleAvailable) {
-      ({ data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: dummyEmail,
-        password,
-        user_metadata: { phone: cleanPhone }
-      } as any));
-    } else {
-      ({ data: authData, error: authError } = await supabase.auth.signUp({
-        email: dummyEmail,
-        password,
-        options: { data: { phone: cleanPhone } }
-      }));
-    }
-
-    if (authError) return res.status(400).json({ ok: false, error: authError.message });
-
-    const userId = authData?.user?.id || (authData as any)?.id;
-    if (!userId) return res.status(500).json({ ok: false, error: 'Signup failed: No User ID' });
-
-    // 2. Manual Profile & Wallet Insert
-    const referral_code = `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-
-    const { error: profileError } = await supabase.from('profiles').insert({
-      id: userId,
-      phone_number: cleanPhone,
-      vip_level: 0,
-      display_id: Math.floor(100000 + Math.random() * 900000).toString(),
-      referral_code: referral_code,
-      referred_by: referrerId
-    });
-
-    const { error: walletError } = await supabase.from('wallets').insert({
-      user_id: userId,
-      main_balance: 0,
-      wagering_required: 0,
-    });
-
-    if (profileError || walletError) {
-      console.error("DB Insert Error:", { profileError, walletError });
-      return res.status(500).json({ ok: false, error: 'Database record creation failed' });
-    }
-
-    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: referral_code });
-
-    return res.json({ ok: true }); // <--- Yahan par function END ho raha hai
-
-  } catch (err: any) {
-    console.error('register failed', err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-    // --- NEW UPDATE: Generate a valid Dummy Email ---
-    const cleanPhone = phone.trim();
-    const dummyEmail = `u_${cleanPhone}@winwave.com`;
-    // ------------------------------------------------
-
+    // Resolve the referrer (optional). Supports WW-prefixed referral codes,
+    // raw numeric codes, and phone-number based invitation codes.
     let referrerId: string | null = null;
 
     if (invitationCode) {
@@ -157,28 +114,21 @@ router.post('/register', async (req, res) => {
       const numericMatch = normalizedInvitationCode.match(/^\d{6,}$/);
       const referralMatch = normalizedInvitationCode.match(/^WW[A-Za-z0-9]{6}$/);
 
-      let referrer: any = null;
-      let refErr: any = null;
+      let referrer: { id: string } | null = null;
+      let refErr: unknown = null;
 
-      if (referralMatch) {
-        ({ data: referrer, error: refErr } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('referral_code', normalizedInvitationCode)
-          .maybeSingle());
-      } else if (numericMatch) {
+      if (numericMatch && !referralMatch) {
         const baseCode = normalizedInvitationCode.slice(0, 6);
-        const orFilters = [`referral_code.eq.${baseCode}`, `referral_code.eq.WW${baseCode}`, `phone_number.eq.${normalizedInvitationCode}`].join(',');
         ({ data: referrer, error: refErr } = await supabase
           .from('profiles')
           .select('id')
-          .or(orFilters)
+          .eq('invite_code', baseCode)
           .maybeSingle());
       } else {
         ({ data: referrer, error: refErr } = await supabase
           .from('profiles')
           .select('id')
-          .eq('referral_code', normalizedInvitationCode)
+          .eq('invite_code', normalizedInvitationCode)
           .maybeSingle());
       }
 
@@ -196,77 +146,30 @@ router.post('/register', async (req, res) => {
     }
 
     const context = getDeviceContext(req, body);
-
     const guard = await enforceAbuseGuards(context.ip, phone);
-    if (!guard.ok && isAbuseGuardFailure(guard)) {
+    if (isAbuseGuardFailure(guard)) {
       await logSecurityEvent('register_blocked', phone, context, { reason: guard.reason });
-      if (guard.reason === 'phone_already_registered') {
-        return res.status(409).json({ ok: false, error: 'Phone already registered' });
-      }
+      return res.status(409).json({ ok: false, error: 'Phone already registered' });
     }
 
-    // --- NEW UPDATE: Pass dummyEmail instead of phone to Supabase Auth ---
+    // Create the auth user with a deterministic dummy email derived from the phone.
     const serviceRoleAvailable = isServiceRoleKey();
-
     let authData: any;
     let authError: any;
 
     if (serviceRoleAvailable) {
       ({ data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: dummyEmail, // UPDATED
+        email: dummyEmail,
         password,
-        user_metadata: { phone: cleanPhone } // Save phone in metadata just in case
+        user_metadata: { phone: cleanPhone },
       } as any));
     } else {
       ({ data: authData, error: authError } = await supabase.auth.signUp({
-        email: dummyEmail, // UPDATED
+        email: dummyEmail,
         password,
-        options: {
-          data: { phone: cleanPhone } // Save phone in metadata just in case
-        }
+        options: { data: { phone: cleanPhone } },
       }));
     }
-    // ---------------------------------------------------------------------
-
-    // ... (up ka auth block waisa hi rahe)
-
-    if (authError) {
-      return res.status(400).json({ ok: false, error: authError.message || 'Signup failed' });
-    }
-
-    const userId = (authData as any)?.user?.id;
-
-    if (!userId) {
-      return res.status(500).json({ ok: false, error: 'User ID not found' });
-    }
-
-    // --- MANUAL INSERTION (Trigger ke bajaye ab hum yahan seedha data daal rahe hain) ---
-    const referral_code = `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-
-    // 1. Profile Insert
-    const { error: profileError } = await supabase.from('profiles').insert({
-      id: userId,
-      phone_number: cleanPhone,
-      referral_code: referral_code,
-      referred_by: referrerId
-    });
-
-    // 2. Wallet Insert
-    const { error: walletError } = await supabase.from('wallets').insert({
-      user_id: userId,
-      main_balance: 0,
-      wagering_required: 0,
-    });
-
-    if (profileError || walletError) {
-      console.error("Profile/Wallet creation failed:", { profileError, walletError });
-      return res.status(500).json({ ok: false, error: 'Database record creation failed' });
-    }
-    // ----------------------------------------------------------------------------------
-
-    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: referral_code });
-
-    return res.json({ ok: true });
 
     if (authError) {
       return res.status(400).json({ ok: false, error: authError.message || 'Signup failed' });
@@ -279,35 +182,59 @@ router.post('/register', async (req, res) => {
 
     if (!userId) {
       console.error('Registration failed because Supabase returned no user ID', authData);
-      return res.status(500).json({ ok: false, error: serviceRoleAvailable ? 'Signup failed' : 'Supabase signup failed. Check anon key or service role key.' });
+      return res.status(500).json({
+        ok: false,
+        error: serviceRoleAvailable ? 'Signup failed' : 'Supabase signup failed. Check anon key or service role key.',
+      });
     }
 
-    // Create user/profile
-    const referral_code = `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    // Create the user, profile and wallet rows for the new account. The same
+    // 6-digit numeric code is the user-facing display id and the invite code.
+    const display_id = await generateUniqueDisplayId();
+    const username = `MEMBER_${cleanPhone.slice(-4)}`;
 
-    const profileInsert = {
+    const { error: usersError } = await supabase.from('users').insert({
       id: userId,
-      phone_number: phone,
-      referral_code,
+      phone_number: cleanPhone,
+      password_hash: 'supabase_auth',
+      referral_code: display_id,
       referred_by: referrerId,
-    } as Record<string, any>;
+      vip_level: 0,
+      is_active: true,
+    });
 
-    const { error: userError } = await supabase.from('profiles').insert(profileInsert);
-
-    if (userError) throw userError;
+    const { error: profileError } = await supabase.from('profiles').insert({
+      id: userId,
+      phone: cleanPhone,
+      username,
+      vip_level: 0,
+      balance: 0,
+      invite_code: display_id,
+      inviter_id: referrerId,
+      last_active: new Date().toISOString(),
+    });
 
     const { error: walletError } = await supabase.from('wallets').insert({
       user_id: userId,
       main_balance: 0,
       wagering_required: 0,
+      wagering_completed: 0,
+      total_recharged: 0,
+      total_withdrawn: 0,
     });
 
-    if (walletError) throw walletError;
+    if (usersError || profileError || walletError) {
+      console.error('Account record creation failed:', { usersError, profileError, walletError });
+      // Roll back the orphaned auth user so the phone can be retried cleanly.
+      if (serviceRoleAvailable) {
+        try { await supabase.auth.admin.deleteUser(userId); } catch { /* best effort */ }
+      }
+      return res.status(500).json({ ok: false, error: 'Database record creation failed' });
+    }
 
-    await logSecurityEvent('register_success', phone, context, { userId, referralCode: referral_code });
+    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: display_id });
 
     return res.json({ ok: true });
-
   } catch (err: any) {
     const errorMessage = err?.message || String(err) || 'register_failed';
     console.error('register failed', errorMessage, err);
