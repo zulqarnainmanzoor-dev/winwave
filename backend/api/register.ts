@@ -23,6 +23,36 @@ const isAbuseGuardFailure = (result: AbuseGuardResult): result is AbuseGuardFail
 
 const normalizePhone = (phone: string) => (phone || '').replace(/\D/g, '');
 
+// URL-safe, unambiguous alphabet (no 0/O/1/I/l) for the public display id.
+const DISPLAY_ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+
+const randomDisplayId = (length = 8): string => {
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += DISPLAY_ID_ALPHABET[Math.floor(Math.random() * DISPLAY_ID_ALPHABET.length)];
+  }
+  return out;
+};
+
+// Generates a consistent mixed-alphanumeric, URL-safe display id and verifies it
+// is not already taken, retrying a few times to avoid collisions.
+const generateUniqueDisplayId = async (): Promise<string> => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const candidate = randomDisplayId();
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('display_id', candidate)
+      .maybeSingle();
+    if (error) {
+      // On lookup failure, fall back to a higher-entropy id rather than blocking.
+      return randomDisplayId(12);
+    }
+    if (!data) return candidate;
+  }
+  return randomDisplayId(12);
+};
+
 // NOTE: This is a minimal guard for phone uniqueness.
 // It logs registration attempts but does not block repeated device/IP attempts.
 const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuardResult> => {
@@ -168,12 +198,13 @@ router.post('/register', async (req, res) => {
 
     // Create the profile and wallet rows for the new user.
     const referral_code = `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const display_id = await generateUniqueDisplayId();
 
     const { error: profileError } = await supabase.from('profiles').insert({
       id: userId,
       phone_number: cleanPhone,
       vip_level: 0,
-      display_id: Math.floor(100000 + Math.random() * 900000).toString(),
+      display_id,
       referral_code,
       referred_by: referrerId,
     });

@@ -101,6 +101,9 @@ export type ProfileRow = {
   vip_level?: number | null;
   progress?: number | null;
   wagered_amount?: number | null;
+  avatar_url?: string | null;
+  username?: string | null;
+  withdrawal_pin?: string | number | null;
 };
 
 export function computeVipProgress(vipLevel: number, wageredAmount: number): number {
@@ -306,6 +309,17 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   };
 
   const applyProfileData = useCallback((profile: ProfileRow) => {
+    // Profile identity fields are sourced from the database, not local storage.
+    if (profile.avatar_url) {
+      setAvatar(profile.avatar_url);
+    }
+    if (profile.username) {
+      setUsername(profile.username);
+    }
+    if (profile.withdrawal_pin != null) {
+      setWithdrawalPasswordState(String(profile.withdrawal_pin));
+    }
+
     const level = profile.vip_level;
     const wagered = profile.wagered_amount;
 
@@ -354,7 +368,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
     const { data, error } = await supabase
       .from('profiles')
-      .select('vip_level, progress, wagered_amount')
+      .select('vip_level, progress, wagered_amount, avatar_url, username, withdrawal_pin')
       .eq('id', userId)
       .maybeSingle();
 
@@ -377,6 +391,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
 
     const session = {
+      uid,
       phoneNumber,
       username,
       avatar,
@@ -403,6 +418,21 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(session));
   }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
+
+  // When a session is restored from storage the uid may be missing; recover it
+  // from the Supabase auth session so profile sync can run on load.
+  useEffect(() => {
+    if (!isLoggedIn || uid) return;
+    let cancelled = false;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const recovered = session?.user?.id ?? '';
+      if (!cancelled && recovered) setUid(recovered);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, uid]);
 
   useEffect(() => {
     if (!isLoggedIn || !uid) return;

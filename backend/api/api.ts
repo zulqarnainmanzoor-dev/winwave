@@ -2,12 +2,14 @@ import { Router } from 'express';
 import { supabase } from '../database/db';
 import registerRouter from './register';
 import membersRouter from './members';
+import webhookRouter from './webhook';
 import { getDeviceContext, logSecurityEvent } from './security';
 
 const router = Router();
 
 router.use('/', registerRouter);
 router.use('/members', membersRouter);
+router.use('/webhook', webhookRouter);
 
 router.post('/login', async (req, res) => {
   const { phone, password } = req.body;
