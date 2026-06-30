@@ -45,6 +45,24 @@ export default function AuthView({
     if (storedPhone) {
       setPhone(storedPhone);
     }
+
+    // Referral hard-lock logic: Detect ?ref=CODE or ?invite=CODE from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const refCode = urlParams.get('ref') || urlParams.get('invite');
+
+    if (refCode) {
+      // Store in sessionStorage for persistence across page refreshes
+      sessionStorage.setItem('winwave_referral_code', refCode);
+      setInviteCode(refCode);
+      console.log('Referral code detected from URL:', refCode);
+    } else {
+      // Check sessionStorage for persisted referral code
+      const storedRefCode = sessionStorage.getItem('winwave_referral_code');
+      if (storedRefCode) {
+        setInviteCode(storedRefCode);
+        console.log('Referral code restored from sessionStorage:', storedRefCode);
+      }
+    }
   }, []);
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
@@ -96,26 +114,49 @@ export default function AuthView({
       const email = `${normalizedPhone}@winwave.com`;
 
       if (mode === 'register') {
-        const { data, error } = await supabase.auth.signUp({
+        console.log('🔍 REGISTER DEBUG - Sending referral code to backend:', inviteCode.trim());
+
+        // Call backend registration API to handle referral code properly
+        const registerResponse = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            phone: normalizedPhone,
+            password,
+            invitationCode: inviteCode.trim() || undefined,
+          }),
+        });
+
+        const registerData = await registerResponse.json();
+
+        if (!registerData.ok) {
+          console.error('Registration API error:', registerData.error);
+          setError(registerData.error || 'Registration failed');
+          return;
+        }
+
+        // After successful registration, sign in with Supabase auth
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
-          options: {
-            data: {
-              phone: normalizedPhone,
-              invitation_code: inviteCode.trim() || undefined,
-            },
-          },
         });
 
         if (error) {
-          console.error('Registration error message:', error.message, 'full error:', error);
-          setError(error.message);
+          console.error('Auto-login after registration failed:', error.message);
+          setError('Registration successful but auto-login failed. Please log in manually.');
+          setMode('login');
           return;
         }
 
         localStorage.setItem('winwave_last_phone', normalizedPhone);
-        setSuccess(language === 'EN' ? 'Registration complete. You can now log in.' : 'رجسٹریشن مکمل ہو گئی ہے۔ اب لاگ ان کریں۔');
-        setMode('login');
+        sessionStorage.removeItem('winwave_referral_code'); // Clear referral code after successful registration
+        setSuccess(language === 'EN' ? 'Registration complete! You are now logged in.' : 'رجسٹریشن مکمل ہو گئی ہے! آپ لاگ ان ہو چکے ہیں۔');
+        onLoginSuccess(
+          normalizedPhone,
+          data.user?.id || normalizedPhone,
+          data.user,
+          undefined
+        );
         setPassword('');
         setConfirmPassword('');
         setInviteCode('');
@@ -302,8 +343,15 @@ export default function AuthView({
                   placeholder={language === 'EN' ? 'Invitation code (optional)' : 'انویٹیشن کوڈ (اختیاری)'}
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
-                  className="w-full bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm font-semibold py-2 pr-10"
+                  readOnly={sessionStorage.getItem('winwave_referral_code') !== null}
+                  disabled={sessionStorage.getItem('winwave_referral_code') !== null}
+                  className={`w-full bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm font-semibold py-2 pr-10 ${sessionStorage.getItem('winwave_referral_code') !== null ? 'opacity-60 cursor-not-allowed' : ''}`}
                 />
+                {sessionStorage.getItem('winwave_referral_code') !== null && (
+                  <div className="absolute right-3 text-[10px] text-amber-500 font-bold uppercase tracking-wider">
+                    Locked
+                  </div>
+                )}
               </div>
             </>
           )}

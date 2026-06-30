@@ -2,12 +2,14 @@ import { Router } from 'express';
 import { supabase } from '../database/db';
 import registerRouter from './register';
 import membersRouter from './members';
+import webhookHandler from './webhook';
 import { getDeviceContext, logSecurityEvent } from './security';
 
 const router = Router();
 
 router.use('/', registerRouter);
 router.use('/members', membersRouter);
+router.post('/webhook/jazzcash', webhookHandler);
 
 router.post('/login', async (req, res) => {
   const { phone, password } = req.body;
@@ -25,8 +27,9 @@ router.post('/login', async (req, res) => {
   }
 
   try {
+    const email = `${normalizedPhone}@winwave.com`;
     const { data, error } = await supabase.auth.signInWithPassword({
-      phone: normalizedPhone,
+      email,
       password,
     });
 

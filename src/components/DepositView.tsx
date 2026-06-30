@@ -17,13 +17,20 @@ export default function DepositView({
   onBack: () => void;
   onTransactionClick: () => void;
 }) {
-  const { balance, selectedPaymentMethod, setSelectedPaymentMethod } = useUser();
-  const { t } = useLanguage();
+  // Safe Destructuring with Fallbacks to prevent white screen crashes
+  const userContext = useUser();
+  const balance = userContext?.balance ?? 0;
+  const selectedPaymentMethod = userContext?.selectedPaymentMethod ?? "jazzcash";
+  const setSelectedPaymentMethod = userContext?.setSelectedPaymentMethod ?? (() => {});
+
+  const languageContext = useLanguage();
+  const t = languageContext?.t ?? ((key: string) => key);
+
   const [amount, setAmount] = useState<string>("300");
   const [selectedAmount, setSelectedAmount] = useState<number | null>(300);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-
+  // Preset amounts with 2% bonus calculation for UI
   const quickAmounts = [
     { value: 300, bonus: 6 },
     { value: 500, bonus: 10 },
@@ -38,6 +45,22 @@ export default function DepositView({
     { value: 30000, bonus: 600 },
     { value: 50000, bonus: 1000 },
   ];
+
+  // PKPay Gateway Links for specific amounts
+  const paymentLinks: Record<number, string> = {
+    300: "https://cashier.pkpay.click/pay/8fb65585df22bb6c",
+    500: "https://cashier.pkpay.click/pay/7099555e5d96948a",
+    800: "https://cashier.pkpay.click/pay/b40a681c9347518b",
+    1000: "https://cashier.pkpay.click/pay/e6adf22d1645a3c1",
+    2000: "https://cashier.pkpay.click/pay/c9c08cd3ac807b7b",
+    3000: "https://cashier.pkpay.click/pay/2e2843558794d95a",
+    5000: "https://cashier.pkpay.click/pay/9e1931ee76a1c7be",
+    8000: "https://cashier.pkpay.click/pay/3b953ec0d8c699cb",
+    10000: "https://cashier.pkpay.click/pay/bfa519a4a3557a4e",
+    20000: "https://cashier.pkpay.click/pay/c0346b6c6f66d9e1",
+    30000: "https://cashier.pkpay.click/pay/46ed4014c01a2dd2",
+    50000: "https://cashier.pkpay.click/pay/aa3071795294a6ed"
+  };
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -61,6 +84,29 @@ export default function DepositView({
       }
     } else {
       setSelectedAmount(null);
+    }
+  };
+
+  // Payment Redirection Logic
+  const handlePayNow = () => {
+    const amountToPay = selectedAmount || parseInt(amount);
+
+    if (!amountToPay || isNaN(amountToPay)) {
+      alert("Please select or enter a valid amount.");
+      return;
+    }
+
+    if (selectedPaymentMethod === "usdt") {
+      alert("USDT payment gateway is currently under maintenance. Please use JazzCash or Easypaisa.");
+      return;
+    }
+
+    const targetUrl = paymentLinks[amountToPay];
+
+    if (targetUrl) {
+      window.location.href = targetUrl;
+    } else {
+      alert("Automated deposits are only available for fixed packages right now. Please select a quick amount.");
     }
   };
 
@@ -101,7 +147,7 @@ export default function DepositView({
             <div className="flex items-end gap-1 relative z-10">
               <span className="text-[#93c5fd] font-bold text-sm">Rs</span>
               <span className="text-[#93c5fd] font-bold text-2xl leading-none">
-                {balance.toFixed(2)}
+                {typeof balance === "number" ? balance.toFixed(2) : "0.00"}
               </span>
             </div>
             <div className="absolute -bottom-4 -left-4 opacity-10">
@@ -131,7 +177,7 @@ export default function DepositView({
             <div className="flex items-end gap-1 relative z-10">
               <span className="text-[#93c5fd] font-bold text-sm">Rs</span>
               <span className="text-[#93c5fd] font-bold text-2xl leading-none">
-                {balance.toFixed(2)}
+                {typeof balance === "number" ? balance.toFixed(2) : "0.00"}
               </span>
             </div>
             <div className="absolute -bottom-4 -left-4 opacity-10">
@@ -186,17 +232,18 @@ export default function DepositView({
         </div>
 
         {/* Quick Amounts */}
-          <div className="grid grid-cols-4 gap-2">
-            {quickAmounts.map((q) => {
-              const isSelected = selectedAmount === q.value;
-              return (
-                <button
-                  key={q.value}
-                  onClick={() => handleAmountSelect(q.value)}
-                  className={`relative py-3 rounded-xl font-bold text-sm transition-all shadow-sm flex flex-col items-center justify-center ${isSelected ? "bg-[#2563eb] text-white shadow-[#2563eb]/30" : "bg-[#0f172a] text-gray-300 border border-white/10"}`}
-                >
-                  <div
-                    className={`absolute -top-2 -right-2 text-[10px] px-1.5 py-0.5 rounded-tl-lg rounded-br-lg font-bold ${isSelected ? "bg-[#93c5fd] text-slate-900" : "bg-[#2563eb] text-white"}`}
+        <div className="grid grid-cols-4 gap-2">
+          {quickAmounts.map((q) => {
+            const isSelected = selectedAmount === q.value;
+            return (
+              <button
+                key={q.value}
+                onClick={() => handleAmountSelect(q.value)}
+                type="button"
+                className={`relative py-3 rounded-xl font-bold text-sm transition-all shadow-sm flex flex-col items-center justify-center ${isSelected ? "bg-[#2563eb] text-white shadow-[#2563eb]/30" : "bg-[#0f172a] text-gray-300 border border-white/10"}`}
+              >
+                <div
+                  className={`absolute -top-2 -right-2 text-[10px] px-1.5 py-0.5 rounded-tl-lg rounded-br-lg font-bold ${isSelected ? "bg-[#93c5fd] text-slate-900" : "bg-[#2563eb] text-white"}`}
                 >
                   +{q.bonus}
                 </div>
@@ -209,7 +256,7 @@ export default function DepositView({
         {/* Payment Methods */}
         <div className="mt-6">
           <div className="flex items-center gap-1 mb-3">
-            <span className="text-gray-800 text-sm">Payment methods</span>
+            <span className="text-white text-sm">Payment methods</span>
             <span className="text-[#ff4757] text-sm">*</span>
           </div>
 
@@ -233,7 +280,7 @@ export default function DepositView({
                   />
                 </div>
                 <span
-                  className={`font-bold text-sm ${selectedPaymentMethod === "jazzcash" ? "text-gray-800" : "text-gray-400"}`}
+                  className="font-bold text-sm text-white"
                 >
                   Jazzcash
                 </span>
@@ -261,7 +308,7 @@ export default function DepositView({
                   />
                 </div>
                 <span
-                  className={`font-bold text-sm ${selectedPaymentMethod === "easypaisa" ? "text-gray-800" : "text-gray-400"}`}
+                  className="font-bold text-sm text-white"
                 >
                   Easypaisa
                 </span>
@@ -286,7 +333,7 @@ export default function DepositView({
                   />
                 </div>
                 <span
-                  className={`font-bold text-sm ${selectedPaymentMethod === "usdt" ? "text-gray-800" : "text-gray-400"}`}
+                  className="font-bold text-sm text-white"
                 >
                   USDT
                 </span>
@@ -305,7 +352,7 @@ export default function DepositView({
           <p className="text-white font-bold mb-1">Deposit tips:</p>
           <p>1.Each deposit will be credited within 1-5 minutes</p>
           <p>
-            2.After the payment is successful, please return to the POPZAR
+            2.After the payment is successful, please return to the Winwave
             deposit page to check your account balance.
           </p>
           <p>
@@ -323,14 +370,14 @@ export default function DepositView({
 
       {/* Pay Now Button */}
       <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-[#08101f] backdrop-blur-sm z-50 border-t border-white/10">
-          <button
+        <button
           onClick={handlePayNow}
+          type="button"
           className="w-full bg-[#2563eb] text-white font-bold text-lg py-3.5 rounded-full shadow-lg shadow-[#2563eb]/30 hover:bg-[#1d4ed8] transition-all"
-          >
+        >
           Pay now
         </button>
       </div>
     </div>
   );
 }
-

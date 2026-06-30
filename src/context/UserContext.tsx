@@ -30,6 +30,7 @@ interface UserContextType {
   referralCode: string;
   referralCount: number;
   totalCommissions: number;
+  setTotalCommissions: (amount: number) => void;
   claimedDailyBonus: boolean;
   setClaimedDailyBonus: (v: boolean) => void;
   dailyWagerProgress: number;
@@ -175,9 +176,13 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [wageringCompleted, setWageringCompleted] = useState(savedSession?.wageringCompleted ?? 0);
   const [referralCode, setReferralCode] = useState(savedSession?.referralCode || '');
   const [referralCount, setReferralCount] = useState(savedSession?.referralCount ?? 0);
-  const [totalCommissions, setTotalCommissions] = useState(savedSession?.totalCommissions ?? 0);
+  const [totalCommissions, setTotalCommissionsState] = useState(savedSession?.totalCommissions ?? 0);
   const [claimedDailyBonus, setClaimedDailyBonus] = useState(savedSession?.claimedDailyBonus ?? false);
   const [dailyWagerProgress, setDailyWagerProgress] = useState(savedSession?.dailyWagerProgress ?? 0);
+
+  const setTotalCommissions = (amount: number) => {
+    setTotalCommissionsState(amount);
+  };
   const [lastLogin, setLastLogin] = useState(savedSession?.lastLogin || '');
   const [phoneNumber, setPhoneNumberState] = useState(savedSession?.phoneNumber || '');
   const [selectedPaymentMethod, setSelectedPaymentMethodState] = useState<'jazzcash' | 'easypaisa' | 'usdt'>(
@@ -260,10 +265,10 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     return true;
   }, [mainWalletBalance, thirdPartyWalletBalance]);
 
-  const login = (
+  const login = async (
     phoneNumberValue: string,
     userId?: string,
-    profile?: { referral_code?: string; phone_number?: string },
+    profile?: { referral_code?: string; phone_number?: string; vip_level?: number; progress?: number; wagered_amount?: number },
     wallet?: { main_balance?: number; wagering_required?: number }
   ) => {
     const suffix = phoneNumberValue.substring(Math.max(0, phoneNumberValue.length - 4));
@@ -281,6 +286,25 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
     setLastLogin(new Date().toISOString());
     setIsLoggedIn(true);
+
+    // Fetch and apply profile data (VIP status, progress, account level)
+    if (userId) {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('vip_level, progress, wagered_amount')
+          .eq('id', userId)
+          .maybeSingle();
+
+        if (error) {
+          console.error('Failed to fetch profile data on login:', error);
+        } else if (data) {
+          applyProfileData(data);
+        }
+      } catch (err) {
+        console.error('Error fetching profile data on login:', err);
+      }
+    }
   };
 
   const logout = () => {
@@ -366,6 +390,44 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     if (data) {
       applyProfileData(data);
     }
+
+    // Fetch wallet balance
+    const { data: walletData, error: walletError } = await supabase
+      .from('wallets')
+      .select('main_balance')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (!walletError && walletData) {
+      setMainWalletBalanceState(walletData.main_balance || 0);
+    }
+
+    // Calculate yesterday's commission from betting history
+    try {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      yesterday.setHours(0, 0, 0, 0);
+
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Fetch bets from yesterday
+      const { data: betsData, error: betsError } = await supabase
+        .from('bets')
+        .select('amount, created_at')
+        .eq('user_id', userId)
+        .gte('created_at', yesterday.toISOString())
+        .lt('created_at', today.toISOString());
+
+      if (!betsError && betsData) {
+        // Calculate commission (e.g., 1% of total bets)
+        const totalBets = betsData.reduce((sum, bet) => sum + (bet.amount || 0), 0);
+        const commission = totalBets * 0.01; // 1% commission rate
+        setTotalCommissions(commission);
+      }
+    } catch (err) {
+      console.error('Error calculating yesterday\'s commission:', err);
+    }
   }, [uid, applyProfileData]);
 
   useEffect(() => {
@@ -388,7 +450,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       wageringRequired,
       wageringCompleted,
       referralCount,
-      totalCommissions,
+      totalCommissions: totalCommissionsState,
       claimedDailyBonus,
       dailyWagerProgress,
       cumulativeWager,
@@ -402,7 +464,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     };
 
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(session));
-  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
+  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissionsState, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
 
   useEffect(() => {
     if (!isLoggedIn || !uid) return;
@@ -481,7 +543,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       addDepositWithBonus,
       referralCode,
       referralCount,
-      totalCommissions,
+      totalCommissions: totalCommissionsState,
+      setTotalCommissions,
       claimedDailyBonus,
       setClaimedDailyBonus,
       dailyWagerProgress,

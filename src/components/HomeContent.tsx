@@ -51,6 +51,25 @@ export default function HomeContent({
 }) {
   const [showMaintenance, setShowMaintenance] = useState(false);
 
+  // Games under maintenance - completely hidden
+  const MAINTENANCE_GAMES = [
+    'K3',
+    '5D',
+    'TRX Win',
+    'AVIATOR',
+    'BOOM',
+    'GOAL',
+    'CRICKET',
+    'MINES PRO',
+    'HOTLINE',
+    'KENO',
+    'WG',
+    'SEXY',
+    'MG LIVE',
+    'EVOLUTION',
+    'EZUGI',
+  ];
+
   return (
     <div className="px-4 flex flex-col gap-6 pb-6 relative">
       {/* Lottery */}
@@ -76,54 +95,9 @@ export default function HomeContent({
               <div className="text-white font-black text-xl leading-tight">Win Go</div>
             </div>
           </div>
-          <div
-            className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
-            onClick={() => setShowMaintenance(true)}
-          >
-            <div className="absolute inset-0 bg-gradient-to-br from-[#E68A33] to-[#B35900]" />
-            <img
-              src="assets/Games Sections/Lottery/Featured Games/K3.webp"
-              alt="K3"
-              className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
-            <div className="absolute inset-x-0 bottom-0 p-3 z-10">
-              <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">K3 Lottery</div>
-              <div className="text-white font-black text-xl leading-tight">K3</div>
-            </div>
-          </div>
-          <div
-            className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
-            onClick={() => setShowMaintenance(true)}
-          >
-            <div className="absolute inset-0 bg-gradient-to-br from-[#4DA6FF] to-[#0059B3]" />
-            <img
-              src="assets/Games Sections/Lottery/Featured Games/5D.webp"
-              alt="5D"
-              className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
-            <div className="absolute inset-x-0 bottom-0 p-3 z-10">
-              <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">5D Lottery</div>
-              <div className="text-white font-black text-xl leading-tight">5D</div>
-            </div>
-          </div>
-          <div
-            className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
-            onClick={() => setShowMaintenance(true)}
-          >
-            <div className="absolute inset-0 bg-gradient-to-br from-[#33CCCC] to-[#008080]" />
-            <img
-              src="assets/Games Sections/Lottery/Featured Games/TRX Win.webp"
-              alt="TRX Wingo"
-              className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
-            <div className="absolute inset-x-0 bottom-0 p-3 z-10">
-              <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">TRX Win</div>
-              <div className="text-white font-black text-xl leading-tight">TRX Win</div>
-            </div>
-          </div>
+          {/* K3 - Under maintenance */}
+          {/* 5D - Under maintenance */}
+          {/* TRX Win - Under maintenance */}
         </GameGrid>
       </section>
 
@@ -134,124 +108,25 @@ export default function HomeContent({
           icon={<Crown className="w-5 h-5 text-amber-500" />}
         />
         <GameGrid cols={3}>
-          {/* Recommended Game Logos */}
-          <GameCard
-            title="AVIATOR"
-            img="assets/Games Sections/Recommended Games/Aviator.webp"
-            bgColor="bg-[#2B2735]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="BOOM"
-            bgColor="bg-[#0080ff]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="GOAL"
-            img="assets/Games Sections/Recommended Games/Goal.png"
-            bgColor="bg-[#2B2735]"
-            onClick={() => setShowMaintenance(true)}
-          />
+          {/* Recommended Game Logos - Only show WIN GO (others under maintenance) */}
           <GameCard
             title="WIN GO"
             img="assets/Games Sections/Recommended Games/WinGo.webp"
             bgColor="bg-[#2B2735]"
             onClick={onWinGoClick}
           />
-          <GameCard
-            title="CRICKET"
-            img="assets/Games Sections/Recommended Games/Cricket.webp"
-            bgColor="bg-[#33cc33]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="MINES PRO"
-            img="assets/Games Sections/Recommended Games/Mines Pro.webp"
-            bgColor="bg-[#2B2735]"
-            onClick={() => setShowMaintenance(true)}
-          />
+          {/* AVIATOR - Under maintenance */}
+          {/* BOOM - Under maintenance */}
+          {/* GOAL - Under maintenance */}
+          {/* CRICKET - Under maintenance */}
+          {/* MINES PRO - Under maintenance */}
         </GameGrid>
       </section>
 
-      {/* Mini games */}
-      <section>
-        <SectionHeader
-          title="Mini games"
-          icon={<Rocket className="w-5 h-5 text-amber-500" />}
-        />
-        <GameGrid cols={2}>
-          <GameCard
-            title="HOTLINE"
-            bgColor="bg-[#0033cc]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="KENO"
-            bgColor="bg-[#cc0066]"
-            onClick={() => setShowMaintenance(true)}
-          />
-        </GameGrid>
-      </section>
-
-      {/* Casino */}
-      <section>
-        <SectionHeader
-          title="Casino"
-          icon={<Sparkles className="w-5 h-5 text-amber-500" />}
-        />
-        <GameGrid cols={3}>
-          <GameCard
-            title="WG"
-            bgColor="bg-gradient-to-br from-[#666] to-[#333]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="SEXY"
-            bgColor="bg-gradient-to-br from-[#888] to-[#444]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="MG LIVE"
-            bgColor="bg-gradient-to-br from-[#555] to-[#222]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="AG"
-            bgColor="bg-gradient-to-br from-[#999] to-[#555]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="EVO"
-            bgColor="bg-gradient-to-br from-[#777] to-[#444]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="PP"
-            bgColor="bg-gradient-to-br from-[#888] to-[#555]"
-            onClick={() => setShowMaintenance(true)}
-          />
-        </GameGrid>
-      </section>
-
-      {/* Slots */}
-      <section>
-        <SectionHeader
-          title="Slots"
-          icon={<Gamepad2 className="w-5 h-5 text-amber-500" />}
-        />
-        <GameGrid cols={2}>
-          <GameCard
-            title="JILI GAMES"
-            bgColor="bg-[#4a154b]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="EVOLUTION"
-            bgColor="bg-[#14234b]"
-            onClick={() => setShowMaintenance(true)}
-          />
-        </GameGrid>
-      </section>
+      {/* Mini games - All under maintenance, section hidden */}
+      {/* Casino - All under maintenance, section hidden */}
+      {/* Slots - All under maintenance, section hidden */}
+      {/* Sports - All under maintenance, section hidden */}
 
       {/* Promo Banners */}
 
@@ -275,80 +150,9 @@ export default function HomeContent({
       </div>
 
 
-      {/* Sports */}
-      <section>
-        <SectionHeader
-          title="Sports"
-          icon={<Flame className="w-5 h-5 text-amber-500" />}
-        />
-        <GameGrid cols={3}>
-          <GameCard
-            title="K9"
-            bgColor="bg-[#cc5200]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="CMD"
-            bgColor="bg-[#0052cc]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="SABA"
-            bgColor="bg-[#cc7a00]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="IM"
-            bgColor="bg-[#002b80]"
-            onClick={() => setShowMaintenance(true)}
-          />
-        </GameGrid>
-      </section>
-
-      {/* Rummy */}
-      <section>
-        <SectionHeader
-          title="Rummy"
-          icon={<Layers className="w-5 h-5 text-amber-500" />}
-        />
-        <GameGrid cols={2}>
-          <GameCard
-            title="365"
-            bgColor="bg-[#1a1a1a]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="V8 POKER"
-            bgColor="bg-[#1a1a1a]"
-            onClick={() => setShowMaintenance(true)}
-          />
-        </GameGrid>
-      </section>
-
-      {/* Fishing */}
-      <section>
-        <SectionHeader
-          title="Fishing"
-          icon={<Fish className="w-5 h-5 text-amber-500" />}
-        />
-        <GameGrid cols={3}>
-          <GameCard
-            title="JILI"
-            bgColor="bg-[#0066cc]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="FC"
-            bgColor="bg-[#0099cc]"
-            onClick={() => setShowMaintenance(true)}
-          />
-          <GameCard
-            title="JDB"
-            bgColor="bg-[#00cccc]"
-            onClick={() => setShowMaintenance(true)}
-          />
-        </GameGrid>
-      </section>
+      {/* Sports - All under maintenance, section hidden */}
+      {/* Rummy - All under maintenance, section hidden */}
+      {/* Fishing - All under maintenance, section hidden */}
 
       {/* Super Jackpot */}
       <section className="bg-[#1C1C1F] border border-white/5 rounded-xl p-4 flex flex-col gap-3">

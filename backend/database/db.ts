@@ -56,7 +56,7 @@ export const isServiceRoleKey = () => Boolean(normalizeServiceRoleKey(process.en
 
 export const checkDbConnection = async () => {
   try {
-    const { data, error } = await supabase.from('users').select('count', { count: 'exact', head: true });
+    const { data, error } = await supabase.from('profiles').select('count', { count: 'exact', head: true });
     if (error) throw error;
     return true;
   } catch (err) {

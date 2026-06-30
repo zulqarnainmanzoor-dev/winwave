@@ -10,6 +10,7 @@
 
 import { useState, useEffect } from 'react';
 
+import ErrorBoundary from './components/ErrorBoundary';
 import Header from './components/Header';
 
 import VipStatus from './components/VipStatus';
@@ -173,10 +174,10 @@ export default function App() {
 
 
   return (
+    <ErrorBoundary>
+      <div className="min-h-screen bg-[#0A0A0B] flex justify-center font-sans selection:bg-amber-500 selection:text-black">
 
-    <div className="min-h-screen bg-[#0A0A0B] flex justify-center font-sans selection:bg-amber-500 selection:text-black">
-
-      <div className={`w-full max-w-md bg-gradient-to-b from-[#161618] to-[#0A0A0B] text-gray-100 relative min-h-screen overflow-x-hidden shadow-2xl border-x border-white/5 flex flex-col ${currentView !== 'wingo' && currentView !== 'transaction' && currentView !== 'deposit' && currentView !== 'deposit-history' && currentView !== 'withdraw' && currentView !== 'vip' && currentView !== 'notice' ? 'pb-[120px]' : ''}`}>
+        <div className={`w-full max-w-md bg-gradient-to-b from-[#161618] to-[#0A0A0B] text-gray-100 relative min-h-screen overflow-x-hidden shadow-2xl border-x border-white/5 flex flex-col ${currentView !== 'wingo' && currentView !== 'transaction' && currentView !== 'deposit' && currentView !== 'deposit-history' && currentView !== 'withdraw' && currentView !== 'vip' && currentView !== 'notice' ? 'pb-[120px]' : ''}`}>
 
        
 
@@ -323,7 +324,7 @@ export default function App() {
       </div>
 
     </div>
-
+    </ErrorBoundary>
   );
 
 }

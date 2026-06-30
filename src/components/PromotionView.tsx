@@ -30,6 +30,7 @@ export default function PromotionView() {
     referralCode,
     referralCount,
     totalCommissions,
+    setTotalCommissions,
     balance,
     setBalance
   } = useUser();
@@ -75,11 +76,16 @@ export default function PromotionView() {
     setTimeout(() => setCopiedCode(false), 2000);
   };
 
-  const handleInviteFriends = () => {
-    const inviteLink = `${window.location.origin}/?ref=${referralCode}`;
-    navigator.clipboard.writeText(inviteLink);
-    setCopiedInvite(true);
-    setTimeout(() => setCopiedInvite(false), 2000);
+  const handleInviteFriends = async () => {
+    try {
+      const inviteLink = `${window.location.origin}/?ref=${referralCode}`;
+      await navigator.clipboard.writeText(inviteLink);
+      setCopiedInvite(true);
+      setTimeout(() => setCopiedInvite(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy invite link:', err);
+      alert('Failed to copy link. Please try again.');
+    }
   };
 
   // Touch handlers for carousel swipe
