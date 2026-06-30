@@ -23,34 +23,31 @@ const isAbuseGuardFailure = (result: AbuseGuardResult): result is AbuseGuardFail
 
 const normalizePhone = (phone: string) => (phone || '').replace(/\D/g, '');
 
-// URL-safe, unambiguous alphabet (no 0/O/1/I/l) for the public display id.
-const DISPLAY_ID_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
-
-const randomDisplayId = (length = 8): string => {
-  let out = '';
-  for (let i = 0; i < length; i += 1) {
-    out += DISPLAY_ID_ALPHABET[Math.floor(Math.random() * DISPLAY_ID_ALPHABET.length)];
-  }
-  return out;
+// Public, user-facing display id: a random 6-digit numeric code (e.g. "634079").
+// The internal uuid (profiles.id) remains the source of truth for DB relations.
+const randomDisplayId = (digits = 6): string => {
+  const min = 10 ** (digits - 1);
+  const max = 10 ** digits - 1;
+  return String(Math.floor(min + Math.random() * (max - min + 1)));
 };
 
-// Generates a consistent mixed-alphanumeric, URL-safe display id and verifies it
-// is not already taken, retrying a few times to avoid collisions.
+// Generates a 6-digit numeric display id and verifies it is not already taken,
+// retrying a few times to avoid collisions; widens to 8 digits as a fallback.
 const generateUniqueDisplayId = async (): Promise<string> => {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     const candidate = randomDisplayId();
     const { data, error } = await supabase
       .from('profiles')
       .select('id')
-      .eq('display_id', candidate)
+      .eq('invite_code', candidate)
       .maybeSingle();
     if (error) {
       // On lookup failure, fall back to a higher-entropy id rather than blocking.
-      return randomDisplayId(12);
+      return randomDisplayId(8);
     }
     if (!data) return candidate;
   }
-  return randomDisplayId(12);
+  return randomDisplayId(8);
 };
 
 // NOTE: This is a minimal guard for phone uniqueness.
@@ -60,7 +57,7 @@ const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuard
   const { data: existingProfiles, error: existingProfilesErr } = await supabase
     .from('profiles')
     .select('id')
-    .eq('phone_number', phone)
+    .eq('phone', phone)
     .limit(1);
 
   if (existingProfilesErr) throw existingProfilesErr;
@@ -102,7 +99,7 @@ router.post('/register', async (req, res) => {
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'Invalid password' });
 
     const cleanPhone = phone.trim();
-    const dummyEmail = `u_${cleanPhone}@winwave.com`;
+    const dummyEmail = `${cleanPhone}@winwave.com`;
 
     // Resolve the referrer (optional). Supports WW-prefixed referral codes,
     // raw numeric codes, and phone-number based invitation codes.
@@ -122,21 +119,16 @@ router.post('/register', async (req, res) => {
 
       if (numericMatch && !referralMatch) {
         const baseCode = normalizedInvitationCode.slice(0, 6);
-        const orFilters = [
-          `referral_code.eq.${baseCode}`,
-          `referral_code.eq.WW${baseCode}`,
-          `phone_number.eq.${normalizedInvitationCode}`,
-        ].join(',');
         ({ data: referrer, error: refErr } = await supabase
           .from('profiles')
           .select('id')
-          .or(orFilters)
+          .eq('invite_code', baseCode)
           .maybeSingle());
       } else {
         ({ data: referrer, error: refErr } = await supabase
           .from('profiles')
           .select('id')
-          .eq('referral_code', normalizedInvitationCode)
+          .eq('invite_code', normalizedInvitationCode)
           .maybeSingle());
       }
 
@@ -196,31 +188,51 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Create the profile and wallet rows for the new user.
-    const referral_code = `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    // Create the user, profile and wallet rows for the new account. The same
+    // 6-digit numeric code is the user-facing display id and the invite code.
     const display_id = await generateUniqueDisplayId();
+    const username = `MEMBER_${cleanPhone.slice(-4)}`;
+
+    const { error: usersError } = await supabase.from('users').insert({
+      id: userId,
+      phone_number: cleanPhone,
+      password_hash: 'supabase_auth',
+      referral_code: display_id,
+      referred_by: referrerId,
+      vip_level: 0,
+      is_active: true,
+    });
 
     const { error: profileError } = await supabase.from('profiles').insert({
       id: userId,
-      phone_number: cleanPhone,
+      phone: cleanPhone,
+      username,
       vip_level: 0,
-      display_id,
-      referral_code,
-      referred_by: referrerId,
+      balance: 0,
+      invite_code: display_id,
+      inviter_id: referrerId,
+      last_active: new Date().toISOString(),
     });
 
     const { error: walletError } = await supabase.from('wallets').insert({
       user_id: userId,
       main_balance: 0,
       wagering_required: 0,
+      wagering_completed: 0,
+      total_recharged: 0,
+      total_withdrawn: 0,
     });
 
-    if (profileError || walletError) {
-      console.error('Profile/Wallet creation failed:', { profileError, walletError });
+    if (usersError || profileError || walletError) {
+      console.error('Account record creation failed:', { usersError, profileError, walletError });
+      // Roll back the orphaned auth user so the phone can be retried cleanly.
+      if (serviceRoleAvailable) {
+        try { await supabase.auth.admin.deleteUser(userId); } catch { /* best effort */ }
+      }
       return res.status(500).json({ ok: false, error: 'Database record creation failed' });
     }
 
-    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: referral_code });
+    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: display_id });
 
     return res.json({ ok: true });
   } catch (err: any) {

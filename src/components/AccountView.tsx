@@ -44,6 +44,7 @@ export default function AccountView({
     username,
     avatar,
     uid,
+    displayId,
     lastLogin,
     totalBalance,
     mainWalletBalance,
@@ -60,12 +61,12 @@ export default function AccountView({
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
 
-  const displayUid = formatDisplayUid(uid);
+  const displayUid = displayId || formatDisplayUid(uid);
 
   const handleCopyUid = async () => {
-    if (!uid) return;
+    if (!displayUid) return;
     try {
-      await navigator.clipboard.writeText(uid);
+      await navigator.clipboard.writeText(displayUid);
       setCopiedUid(true);
       setTimeout(() => setCopiedUid(false), 2000);
     } catch {

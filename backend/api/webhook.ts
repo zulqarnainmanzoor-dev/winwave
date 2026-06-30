@@ -67,7 +67,7 @@ async function resolveUserId(payload: Record<string, unknown>): Promise<string |
     const { data } = await supabase
       .from('profiles')
       .select('id')
-      .eq('phone_number', phone)
+      .eq('phone', phone)
       .maybeSingle();
     if (data?.id) return data.id as string;
   }
