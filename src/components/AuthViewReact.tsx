@@ -16,7 +16,7 @@ interface AuthViewProps {
   onLoginSuccess: (
     phoneNumber: string,
     userId?: string,
-    profile?: { referral_code?: string },
+    profile?: { referral_code?: string; phone_number?: string },
     wallet?: { main_balance?: number; wagering_required?: number }
   ) => void;
   initialMode?: "login" | "register";
@@ -32,6 +32,7 @@ export default function AuthView({
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
+  const [isReferralLocked, setIsReferralLocked] = useState(false);
   const [rememberPassword, setRememberPassword] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -46,26 +47,60 @@ export default function AuthView({
       setPhone(storedPhone);
     }
 
-    // Referral hard-lock logic: Detect ?ref=CODE or ?invite=CODE from URL
+    // Referral logic: detect ?ref=CODE or ?invite=CODE from URL and persist to localStorage
     const urlParams = new URLSearchParams(window.location.search);
     const refCode = urlParams.get('ref') || urlParams.get('invite');
 
     if (refCode) {
-      // Store in sessionStorage for persistence across page refreshes
-      sessionStorage.setItem('winwave_referral_code', refCode);
+      // Persist referral code to localStorage so it survives full reloads
+      localStorage.setItem('winwave_referral_code', refCode);
+      localStorage.setItem('winwave_force_register', 'true'); // mark that user should be forced to register
       setInviteCode(refCode);
-      console.log('Referral code detected from URL:', refCode);
+      setIsReferralLocked(true);
+      setMode('register');
+      console.log('🔗 REFERRAL - Detected ref from URL, saved to localStorage:', refCode);
+
+      // Clear ephemeral session items that might conflict
+      sessionStorage.removeItem('winwave_user_session');
+      sessionStorage.removeItem('b9_logged_in');
+      sessionStorage.removeItem('cumulative_wager');
     } else {
-      // Check sessionStorage for persisted referral code
-      const storedRefCode = sessionStorage.getItem('winwave_referral_code');
+      // Restore from localStorage if present
+      const storedRefCode = localStorage.getItem('winwave_referral_code');
       if (storedRefCode) {
         setInviteCode(storedRefCode);
-        console.log('Referral code restored from sessionStorage:', storedRefCode);
+        setIsReferralLocked(true);
+        setMode('register');
       }
+    }
+
+    // If user is already logged in and lands on a URL with ref param, redirect them away
+    try {
+      const storedSession = localStorage.getItem('winwave_user_session');
+      if (storedSession) {
+        // Redirect logged-in users away from registration pages
+        if (window.location.search.includes('ref=') || window.location.search.includes('invite=')) {
+          window.location.replace('/dashboard');
+        }
+      }
+    } catch (e) {
+      // ignore
     }
   }, []);
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
+
+  const normalizePakistanPhone = (value: string) => {
+    const digits = normalizePhone(value);
+    const normalized = digits.length === 10 ? digits : digits.length === 11 && digits.startsWith('0') ? digits.slice(1) : '';
+    return /^03\d{9}$/.test(`0${normalized}`) ? normalized : '';
+  };
+
+  const validatePakistanPhoneInput = (value: string) => {
+    const digits = normalizePhone(value);
+    const normalized = digits.length === 10 ? digits : digits.length === 11 && digits.startsWith('0') ? digits.slice(1) : '';
+    return /^03\d{9}$/.test(`0${normalized}`);
+  };
 
   const getDeviceId = () => {
     let deviceId = localStorage.getItem('winwave_device_id');
@@ -81,10 +116,10 @@ export default function AuthView({
     setError(null);
     setSuccess(null);
 
-    const normalizedPhone = normalizePhone(phone);
+    const normalizedPhone = normalizePakistanPhone(phone);
 
     if (!normalizedPhone) {
-      setError(language === 'EN' ? 'Please enter your phone number.' : 'براہ کرم اپنا فون نمبر درج کریں۔');
+      setError(language === 'EN' ? 'Please enter a valid 10-digit Pakistani phone number.' : 'براہ کرم درست 10 ہندسوں کا پاکستانی فون نمبر درج کریں۔');
       return;
     }
 
@@ -94,8 +129,8 @@ export default function AuthView({
     }
 
     if (mode === 'register') {
-      if (normalizedPhone.startsWith('0')) {
-        setError(language === 'EN' ? 'The phone number cannot start with 0 when registering.' : 'رجسٹریشن کے وقت فون نمبر 0 سے شروع نہیں ہو سکتا۔');
+      if (normalizedPhone.length !== 10) {
+        setError(language === 'EN' ? 'The phone number must be exactly 10 digits for Pakistani registration.' : 'رجسٹریشن کے لیے فون نمبر بالکل 10 ہندسے ہونا چاہیے۔');
         return;
       }
       if (password !== confirmPassword) {
@@ -127,11 +162,28 @@ export default function AuthView({
           }),
         });
 
-        const registerData = await registerResponse.json();
+        let registerData: any;
+        try {
+          registerData = await registerResponse.json();
+        } catch (parseError) {
+          const text = await registerResponse.text().catch(() => '');
+          console.error('Registration response parse failed:', parseError, 'responseText:', text);
+          setError(
+            language === 'EN'
+              ? 'Registration failed: invalid server response. Please try again.'
+              : 'رجسٹریشن ناکام رہی: سرور نے درست جواب نہیں دیا۔ دوبارہ کوشش کریں۔'
+          );
+          return;
+        }
 
-        if (!registerData.ok) {
-          console.error('Registration API error:', registerData.error);
-          setError(registerData.error || 'Registration failed');
+        if (!registerResponse.ok || !registerData?.ok) {
+          console.error('Registration API error:', registerResponse.status, registerData?.error || registerData);
+          setError(
+            registerData?.error ||
+              (registerResponse.ok
+                ? 'Registration failed.'
+                : 'Registration failed: server error.')
+          );
           return;
         }
 
@@ -149,12 +201,17 @@ export default function AuthView({
         }
 
         localStorage.setItem('winwave_last_phone', normalizedPhone);
-        sessionStorage.removeItem('winwave_referral_code'); // Clear referral code after successful registration
+        
+        // Clear referral tracking after successful registration
+        localStorage.removeItem('winwave_referral_code');
+        localStorage.removeItem('winwave_force_register');
+        setIsReferralLocked(false);
+        
         setSuccess(language === 'EN' ? 'Registration complete! You are now logged in.' : 'رجسٹریشن مکمل ہو گئی ہے! آپ لاگ ان ہو چکے ہیں۔');
         onLoginSuccess(
           normalizedPhone,
           data.user?.id || normalizedPhone,
-          data.user,
+          { referral_code: registerData.referral_code as string || undefined, phone_number: normalizedPhone },
           undefined
         );
         setPassword('');
@@ -179,7 +236,7 @@ export default function AuthView({
         onLoginSuccess(
           normalizedPhone,
           data.user?.id || normalizedPhone,
-          data.user,
+          { referral_code: data.user?.user_metadata?.referral_code as string || undefined, phone_number: normalizedPhone },
           undefined
         );
       }
@@ -259,7 +316,11 @@ export default function AuthView({
               type="tel"
               placeholder={t('phonePlaceholder')}
               value={phone}
-              onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+              maxLength={10}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/\D/g, '');
+                setPhone(digits.slice(0, 10));
+              }}
               className="w-full bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm font-semibold py-2"
               required
             />
@@ -343,11 +404,11 @@ export default function AuthView({
                   placeholder={language === 'EN' ? 'Invitation code (optional)' : 'انویٹیشن کوڈ (اختیاری)'}
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
-                  readOnly={sessionStorage.getItem('winwave_referral_code') !== null}
-                  disabled={sessionStorage.getItem('winwave_referral_code') !== null}
-                  className={`w-full bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm font-semibold py-2 pr-10 ${sessionStorage.getItem('winwave_referral_code') !== null ? 'opacity-60 cursor-not-allowed' : ''}`}
+                  readOnly={isReferralLocked}
+                  disabled={isReferralLocked}
+                  className={`w-full bg-transparent text-white placeholder-gray-500 focus:outline-none text-sm font-semibold py-2 pr-10 ${isReferralLocked ? 'opacity-60 cursor-not-allowed' : ''}`}
                 />
-                {sessionStorage.getItem('winwave_referral_code') !== null && (
+                {isReferralLocked && (
                   <div className="absolute right-3 text-[10px] text-amber-500 font-bold uppercase tracking-wider">
                     Locked
                   </div>

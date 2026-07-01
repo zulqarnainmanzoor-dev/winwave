@@ -19,6 +19,14 @@ app.get(`/admin/${adminSecret}`, (req, res) => {
   res.type('html').send(fs.readFileSync(adminIndexPath, 'utf-8'));
 });
 
+// Serve Admin login UI path as well so client-side can handle auth flow
+app.get('/admin/login', (req, res) => {
+  if (!fs.existsSync(adminIndexPath)) {
+    return res.status(404).send('Admin UI not built yet');
+  }
+  res.type('html').send(fs.readFileSync(adminIndexPath, 'utf-8'));
+});
+
 app.use('/api', apiRouter);
 app.use(`/api/admin/${adminSecret}`, adminRouter);
 

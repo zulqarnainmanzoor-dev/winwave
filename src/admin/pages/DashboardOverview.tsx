@@ -1,63 +1,118 @@
-import React from "react";
-import { useAdmin } from "../context/AdminContext";
-import {
-  TrendingUp,
-  Users,
-  DollarSign,
-  CreditCard,
-  Wallet,
-  Activity,
-} from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabaseClient";
+import { Users, DollarSign, CreditCard, Wallet, Activity } from "lucide-react";
 
 interface StatCard {
   title: string;
   value: string | number;
   icon: React.ReactNode;
-  trend?: number;
   unit?: string;
 }
 
+type DashboardStats = {
+  totalUsers: number;
+  pendingDeposits: number;
+  pendingWithdrawals: number;
+  totalWalletBalance: number;
+};
+
 export function DashboardOverview() {
-  const { stats } = useAdmin();
+  const [stats, setStats] = useState<DashboardStats>({
+    totalUsers: 0,
+    pendingDeposits: 0,
+    pendingWithdrawals: 0,
+    totalWalletBalance: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(""
+  );
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      setLoading(true);
+      setError("");
+
+      try {
+        const isMissingTableError = (error: any) => ["42P01", "PGRST205"].includes(error?.code) || /table|relation/i.test(error?.message || "");
+
+        const countRows = async (tables: string[], filters: Array<[string, string]> = []) => {
+          let lastError: any = null;
+          for (const tableName of tables) {
+            let query = supabase.from(tableName).select("id", { count: "exact", head: true });
+            filters.forEach(([column, value]) => {
+              query = query.eq(column, value);
+            });
+            const { count, error } = await query;
+            if (!error) {
+              return Number(count ?? 0);
+            }
+            lastError = error;
+            if (!isMissingTableError(error)) {
+              break;
+            }
+          }
+          return Number(lastError ? 0 : 0);
+        };
+
+        const [{ count: totalUsers }, pendingDeposits, pendingWithdrawals, walletsResult] = await Promise.all([
+          supabase.from("users").select("id", { count: "exact", head: true }),
+          countRows(["transactions", "deposits", "deposit_requests"], [["status", "pending"], ["type", "deposit"]]),
+          countRows(["withdraw_requests", "withdrawals", "transactions"], [["status", "pending"]]),
+          (async () => {
+            const candidates = ["wallets", "users"] as const;
+            for (const tableName of candidates) {
+              const { data, error } = await supabase.from(tableName).select("main_balance");
+              if (!error && Array.isArray(data)) {
+                return data.reduce((sum, row) => sum + Number(row?.main_balance || 0), 0);
+              }
+            }
+            return 0;
+          })(),
+        ]);
+
+        setStats({
+          totalUsers: Number(totalUsers ?? 0),
+          pendingDeposits: Number(pendingDeposits ?? 0),
+          pendingWithdrawals: Number(pendingWithdrawals ?? 0),
+          totalWalletBalance: Number(walletsResult ?? 0),
+        });
+      } catch (err: any) {
+        console.error("Failed to load dashboard stats", err);
+        setError("Unable to load dashboard stats. Please refresh.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchStats();
+  }, []);
 
   const statCards: StatCard[] = [
-    {
-      title: "Total Recharge Today",
-      value: stats.totalRechargeToday,
-      icon: <CreditCard className="w-6 h-6" />,
-      trend: 12.5,
-      unit: "Rs",
-    },
-    {
-      title: "Total Active Users",
-      value: stats.totalActiveUsers,
-      icon: <Activity className="w-6 h-6" />,
-      trend: 8.2,
-    },
     {
       title: "Total Users",
       value: stats.totalUsers,
       icon: <Users className="w-6 h-6" />,
-      trend: 5.1,
     },
     {
-      title: "Total Withdrawals",
-      value: stats.totalWithdrawals,
+      title: "Pending Deposits",
+      value: stats.pendingDeposits,
+      icon: <CreditCard className="w-6 h-6" />,
+    },
+    {
+      title: "Pending Withdrawals",
+      value: stats.pendingWithdrawals,
       icon: <DollarSign className="w-6 h-6" />,
-      trend: -3.2,
-      unit: "Rs",
     },
     {
-      title: "Total Balance",
-      value: stats.totalBalance,
+      title: "Total Wallet Balance",
+      value: stats.totalWalletBalance,
       icon: <Wallet className="w-6 h-6" />,
-      trend: 15.8,
       unit: "Rs",
     },
   ];
 
   const formatNumber = (num: number, unit?: string): string => {
-    let value = "";
+    let value = "0";
     if (num >= 1000000) {
       value = (num / 1000000).toFixed(2) + "M";
     } else if (num >= 1000) {
@@ -77,43 +132,40 @@ export function DashboardOverview() {
           <p className="text-gray-400">Real-time platform statistics and metrics</p>
         </div>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 mb-8">
-          {statCards.map((stat, index) => (
-            <div
-              key={index}
-              className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] hover:border-[#e94560] transition-all duration-300 hover:shadow-lg hover:shadow-red-500/20"
-            >
-              {/* Icon */}
-              <div className="w-12 h-12 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center mb-4">
-                <div className="text-white">{stat.icon}</div>
+        {loading ? (
+          <div className="rounded-xl border border-[#0f3460] bg-[#12131d] p-8 text-center text-gray-400">
+            Loading dashboard statistics...
+          </div>
+        ) : (
+          <>
+            {error ? (
+              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-red-100">
+                {error}
               </div>
-
-              {/* Content */}
-              <h3 className="text-gray-400 text-sm font-medium mb-2">{stat.title}</h3>
-              <div className="flex items-baseline justify-between">
-                <span className="text-2xl font-bold text-white">
-                  {formatNumber(stat.value as number, stat.unit)}
-                </span>
-                {stat.trend !== undefined && (
-                  <span
-                    className={`text-sm font-semibold flex items-center gap-1 ${
-                      stat.trend >= 0 ? "text-[#4ade80]" : "text-[#ef4444]"
-                    }`}
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
+                {statCards.map((stat, index) => (
+                  <div
+                    key={index}
+                    className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] hover:border-[#e94560] transition-all duration-300 hover:shadow-lg hover:shadow-red-500/20"
                   >
-                    <TrendingUp className="w-4 h-4" />
-                    {stat.trend > 0 ? "+" : ""}
-                    {stat.trend}%
-                  </span>
-                )}
+                    <div className="w-12 h-12 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center mb-4">
+                      <div className="text-white">{stat.icon}</div>
+                    </div>
+                    <h3 className="text-gray-400 text-sm font-medium mb-2">{stat.title}</h3>
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-2xl font-bold text-white">
+                        {formatNumber(Number(stat.value), stat.unit)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          ))}
-        </div>
+            )}
+          </>
+        )}
 
-        {/* Charts Section Placeholder */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Revenue Chart */}
           <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
             <h2 className="text-white font-bold text-lg mb-6">Revenue Trend (7 Days)</h2>
             <div className="h-64 bg-[#0f3460] rounded-lg flex items-center justify-center">
@@ -123,78 +175,11 @@ export function DashboardOverview() {
               </div>
             </div>
           </div>
-
-          {/* User Activity */}
           <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h2 className="text-white font-bold text-lg mb-6">User Activity</h2>
-            <div className="space-y-4">
-              {[
-                { label: "New Users", value: 234, color: "from-[#4ade80] to-[#22c55e]" },
-                { label: "Active Sessions", value: 1234, color: "from-[#3b82f6] to-[#1d4ed8]" },
-                { label: "Deposits Today", value: 89, color: "from-[#fbbf24] to-[#f59e0b]" },
-                { label: "Withdrawals Today", value: 56, color: "from-[#f87171] to-[#dc2626]" },
-              ].map((activity, idx) => (
-                <div key={idx}>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-gray-400 text-sm">{activity.label}</span>
-                    <span className="text-white font-bold">{activity.value}</span>
-                  </div>
-                  <div className="h-2 bg-[#0f3460] rounded-full overflow-hidden">
-                    <div
-                      className={`h-full bg-gradient-to-r ${activity.color}`}
-                      style={{ width: `${(activity.value / 1234) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Recent Activities */}
-        <div className="mt-8 bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-          <h2 className="text-white font-bold text-lg mb-6">Recent Activities</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[#0f3460]">
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Time</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">User ID</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Activity</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Amount</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  { time: "2 mins ago", uid: "UID#12345", activity: "Deposit", amount: "Rs 5,000", status: "Success" },
-                  { time: "5 mins ago", uid: "UID#67890", activity: "Bet Placed", amount: "Rs 1,000", status: "Processing" },
-                  { time: "8 mins ago", uid: "UID#11111", activity: "Withdrawal", amount: "Rs 10,000", status: "Pending" },
-                  { time: "12 mins ago", uid: "UID#22222", activity: "Deposit", amount: "Rs 2,500", status: "Success" },
-                  { time: "15 mins ago", uid: "UID#33333", activity: "Game Won", amount: "Rs 1,950", status: "Success" },
-                ].map((activity, idx) => (
-                  <tr key={idx} className="border-b border-[#0f3460] hover:bg-[#0f3460] transition-colors">
-                    <td className="text-gray-300 py-3 px-4">{activity.time}</td>
-                    <td className="text-white font-medium py-3 px-4">{activity.uid}</td>
-                    <td className="text-gray-300 py-3 px-4">{activity.activity}</td>
-                    <td className="text-[#fbbf24] font-medium py-3 px-4">{activity.amount}</td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          activity.status === "Success"
-                            ? "bg-[#4ade80]/20 text-[#4ade80]"
-                            : activity.status === "Processing"
-                              ? "bg-[#3b82f6]/20 text-[#3b82f6]"
-                              : "bg-[#fbbf24]/20 text-[#fbbf24]"
-                        }`}
-                      >
-                        {activity.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <h2 className="text-white font-bold text-lg mb-6">Activity Summary</h2>
+            <p className="text-gray-400 text-sm">
+              Dashboard data is loaded from the database. Recent activities will appear here as game and transaction events are logged.
+            </p>
           </div>
         </div>
       </div>

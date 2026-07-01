@@ -3,13 +3,17 @@ import { supabase } from '../database/db';
 import registerRouter from './register';
 import membersRouter from './members';
 import webhookHandler from './webhook';
+import walletRouter from './wallet';
+import withdrawRouter from './withdraw';
 import { getDeviceContext, logSecurityEvent } from './security';
 
 const router = Router();
 
 router.use('/', registerRouter);
 router.use('/members', membersRouter);
-router.post('/webhook/jazzcash', webhookHandler);
+router.post('/webhook/deposit', webhookHandler);
+router.use('/wallet', walletRouter);
+router.use('/withdraw', withdrawRouter);
 
 router.post('/login', async (req, res) => {
   const { phone, password } = req.body;
@@ -40,7 +44,7 @@ router.post('/login', async (req, res) => {
 
     const userId = data.user.id;
     const [{ data: profileData, error: profileError }, { data: walletData, error: walletError }] = await Promise.all([
-      supabase.from('profiles').select('phone_number, referral_code').eq('id', userId).maybeSingle(),
+      supabase.from('users').select('phone_number, referral_code').eq('id', userId).maybeSingle(),
       supabase.from('wallets').select('main_balance, wagering_required').eq('user_id', userId).maybeSingle(),
     ]);
 
@@ -93,7 +97,7 @@ export const cleanupInactiveUserHistory = async () => {
 
     // 1. Identify inactive users
     const { data: inactiveUsers, error: userError } = await supabase
-      .from('profiles')
+      .from('users')
       .select('id')
       .lt('last_active', sevenDaysAgo.toISOString());
 
@@ -127,6 +131,63 @@ router.post('/admin/cleanup-history', async (req, res) => {
     res.json({ success: true, message: `Cleaned up ${count} users` });
   } catch (err) {
     res.status(500).json({ error: 'Cleanup failed' });
+  }
+});
+
+router.post('/game-rounds/force-outcome', async (req, res) => {
+  const { gameType, outcome } = req.body;
+  if (!gameType || !['wingo', 'k3', 'trx', '5d'].includes(gameType)) {
+    return res.status(400).json({ error: 'Invalid gameType' });
+  }
+  if (!outcome || !['BIG', 'SMALL'].includes(outcome)) {
+    return res.status(400).json({ error: 'Invalid outcome' });
+  }
+
+  try {
+    const tableCandidates = ['game_records', 'game_rounds'];
+    let activeRound: { id: string } | null = null;
+    let activeTable = '';
+
+    for (const tableName of tableCandidates) {
+      const { data, error } = await supabase
+        .from(tableName)
+        .select('id')
+        .eq('game_type', gameType)
+        .eq('status', 'active')
+        .order('started_at', { ascending: false })
+        .limit(1);
+
+      if (!error && data?.[0]?.id) {
+        activeRound = data[0];
+        activeTable = tableName;
+        break;
+      }
+    }
+
+    if (!activeRound || !activeTable) {
+      return res.status(404).json({ error: 'No active round available' });
+    }
+
+    const updatePayloads = [
+      { forced_outcome: outcome, manual_result: outcome },
+      { manual_result: outcome },
+      { forced_outcome: outcome },
+    ];
+
+    let updateError: any = null;
+    for (const payload of updatePayloads) {
+      const { error } = await supabase.from(activeTable).update(payload).eq('id', activeRound.id);
+      if (!error) {
+        return res.json({ success: true, roundId: activeRound.id, forcedOutcome: outcome });
+      }
+      updateError = error;
+    }
+
+    console.error('Error setting forced outcome', updateError);
+    return res.status(500).json({ error: 'Unable to set forced outcome' });
+  } catch (err: any) {
+    console.error('Force outcome error', err);
+    return res.status(500).json({ error: err?.message || 'Error forcing outcome' });
   }
 });
 

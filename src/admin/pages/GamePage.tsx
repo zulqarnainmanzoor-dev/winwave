@@ -1,6 +1,19 @@
-import React from "react";
+import { useEffect, useState } from "react";
 import { useAdmin } from "../context/AdminContext";
 import { GameController } from "../components/GameController";
+import { supabase } from "../../lib/supabaseClient";
+
+interface RecentRound {
+  id: string;
+  started_at?: string | null;
+  ends_at?: string | null;
+  result_size?: string | null;
+  forced_outcome?: string | null;
+  manual_result?: string | null;
+  total_big?: number | null;
+  total_small?: number | null;
+  status?: string | null;
+}
 
 interface GamePageProps {
   gameType: "wingo" | "k3" | "trx" | "5d";
@@ -11,10 +24,107 @@ interface GamePageProps {
 export function GamePage({ gameType, gameTitle, gameDescription }: GamePageProps) {
   const { gameSettings } = useAdmin();
   const settings = gameSettings[gameType];
+  const [activeRound, setActiveRound] = useState<RecentRound | null>(null);
+  const [recentRounds, setRecentRounds] = useState<RecentRound[]>([]);
+  const [loadingRounds, setLoadingRounds] = useState(false);
+  const [roundError, setRoundError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchRecentRounds = async () => {
+      setLoadingRounds(true);
+      setRoundError(null);
+
+      try {
+        const tableName = "game_records";
+        const [{ data: activeData, error: activeError }, { data: recentData, error: recentError }] = await Promise.all([
+          supabase
+            .from(tableName)
+            .select("id,started_at,ends_at,result_size,forced_outcome,manual_result,total_big,total_small,status")
+            .eq("game_type", gameType)
+            .eq("status", "active")
+            .order("started_at", { ascending: false })
+            .limit(1),
+          supabase
+            .from(tableName)
+            .select("id,started_at,ends_at,result_size,forced_outcome,manual_result,total_big,total_small,status")
+            .eq("game_type", gameType)
+            .neq("status", "active")
+            .order("started_at", { ascending: false })
+            .limit(6),
+        ]);
+
+        if (activeError) {
+          console.warn("Failed to load active round", activeError);
+        } else {
+          setActiveRound(activeData?.[0] ?? null);
+        }
+
+        if (recentError) {
+          console.warn("Failed to load recent rounds", recentError);
+          setRoundError("Unable to load recent round history.");
+        } else {
+          setRecentRounds(recentData || []);
+        }
+      } catch (err: any) {
+        console.error(err);
+        setRoundError("Unable to load recent round history.");
+      } finally {
+        setLoadingRounds(false);
+      }
+    };
+
+    fetchRecentRounds();
+
+    const channel = supabase
+      .channel(`game-rounds-${gameType}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "game_rounds",
+          filter: `game_type=eq.${gameType}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            setRecentRounds((prev) => [payload.new as RecentRound, ...prev].slice(0, 6));
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "game_rounds",
+          filter: `game_type=eq.${gameType}`,
+        },
+        (payload) => {
+          if (payload.new) {
+            const updated = payload.new as RecentRound;
+            setRecentRounds((prev) => [updated, ...prev.filter((item) => item.id !== updated.id)].slice(0, 6));
+            setActiveRound((prev) => {
+              if (updated.status === "active") {
+                return updated;
+              }
+              if (prev?.id === updated.id) {
+                return null;
+              }
+              return prev;
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [gameType]);
 
   return (
     <div className="flex-1 overflow-auto">
-      <div className="p-8">
+      <div className="p-4 md:p-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-white mb-2">{gameTitle}</h1>
@@ -22,7 +132,7 @@ export function GamePage({ gameType, gameTitle, gameDescription }: GamePageProps
         </div>
 
         {/* Game Stats Overview */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
           {Object.entries(settings.modes).map(([mode, modeSettings]) => (
             <div
               key={mode}
@@ -56,119 +166,74 @@ export function GamePage({ gameType, gameTitle, gameDescription }: GamePageProps
         {/* Game Controller */}
         <GameController gameType={gameType} />
 
-        {/* Additional Game Management Features */}
-        <div className="mt-8 grid grid-cols-2 gap-6">
-          {/* Win/Loss Statistics */}
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h3 className="text-white font-bold text-lg mb-6">Win/Loss Statistics (24h)</h3>
-            <div className="space-y-4">
-              {[
-                { label: "Total Bets Placed", value: 45234, color: "from-[#3b82f6]" },
-                { label: "Big Wins", value: 21456, color: "from-[#4ade80]" },
-                { label: "Small Wins", value: 23778, color: "from-[#3b82f6]" },
-                { label: "Platform Margin", value: "8.2%", color: "from-[#fbbf24]" },
-              ].map((stat, idx) => (
-                <div key={idx} className="flex justify-between items-center p-3 bg-[#0f3460] rounded-lg">
-                  <span className="text-gray-400">{stat.label}</span>
-                  <span className="text-white font-bold">{stat.value.toLocaleString?.() || stat.value}</span>
-                </div>
-              ))}
+        {/* Active Round Status */}
+        {activeRound && (
+          <div className="mb-8 bg-gradient-to-br from-[#0b1320] to-[#10182d] rounded-xl p-6 border border-[#0f3460]">
+            <h3 className="text-white font-bold text-lg mb-2">Active Round</h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="bg-[#111827] rounded-xl p-4">
+                <p className="text-gray-400 text-sm">Round ID</p>
+                <p className="text-white font-semibold">{activeRound.id}</p>
+              </div>
+              <div className="bg-[#111827] rounded-xl p-4">
+                <p className="text-gray-400 text-sm">Status</p>
+                <p className="text-white font-semibold capitalize">{activeRound.status || 'Active'}</p>
+              </div>
+              <div className="bg-[#111827] rounded-xl p-4">
+                <p className="text-gray-400 text-sm">Result Target</p>
+                <p className={`font-semibold ${activeRound.forced_outcome === 'BIG' || activeRound.manual_result === 'BIG' ? 'text-[#3b82f6]' : activeRound.forced_outcome === 'SMALL' || activeRound.manual_result === 'SMALL' ? 'text-[#4ade80]' : 'text-gray-100'}`}>
+                  {activeRound.forced_outcome || activeRound.manual_result || 'Pending manual override'}
+                </p>
+              </div>
             </div>
           </div>
-
-          {/* Quick Actions */}
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h3 className="text-white font-bold text-lg mb-6">Quick Actions</h3>
-            <div className="space-y-3">
-              <button className="w-full py-3 px-4 bg-gradient-to-r from-[#e94560] to-[#ff6b6b] text-white rounded-lg hover:shadow-lg hover:shadow-red-500/30 transition-all font-medium">
-                View Game Logs
-              </button>
-              <button className="w-full py-3 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all font-medium">
-                Export Statistics
-              </button>
-              <button className="w-full py-3 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all font-medium">
-                Ban/Suspend Players
-              </button>
-              <button className="w-full py-3 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all font-medium">
-                Manage Prize Pool
-              </button>
-            </div>
-          </div>
-        </div>
+        )}
 
         {/* Game History Table */}
         <div className="mt-8 bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-          <h3 className="text-white font-bold text-lg mb-6">Latest {gameTitle} Results</h3>
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-4">
+            <div>
+              <h3 className="text-white font-bold text-lg">Recent Rounds</h3>
+              <p className="text-gray-400 text-sm">Latest completed {gameTitle} rounds from Supabase.</p>
+            </div>
+            {roundError && <span className="text-amber-400 text-sm">{roundError}</span>}
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[#0f3460]">
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Time</th>
                   <th className="text-left text-gray-400 font-semibold py-3 px-4">Round ID</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Total Big Bets</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Total Small Bets</th>
                   <th className="text-left text-gray-400 font-semibold py-3 px-4">Result</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Margin</th>
+                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Big Total</th>
+                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Small Total</th>
+                  <th className="text-left text-gray-400 font-semibold py-3 px-4">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {[
-                  {
-                    time: "14:23:45",
-                    round: "WG#2024-001",
-                    big: "Rs 125,450",
-                    small: "Rs 89,230",
-                    result: "Big Won",
-                    margin: "+8.2%",
-                  },
-                  {
-                    time: "14:24:15",
-                    round: "WG#2024-002",
-                    big: "Rs 98,500",
-                    small: "Rs 156,890",
-                    result: "Small Won",
-                    margin: "+9.5%",
-                  },
-                  {
-                    time: "14:24:45",
-                    round: "WG#2024-003",
-                    big: "Rs 234,120",
-                    small: "Rs 45,600",
-                    result: "Big Won",
-                    margin: "-2.1%",
-                  },
-                  {
-                    time: "14:25:15",
-                    round: "WG#2024-004",
-                    big: "Rs 156,750",
-                    small: "Rs 198,340",
-                    result: "Small Won",
-                    margin: "+7.8%",
-                  },
-                  {
-                    time: "14:25:45",
-                    round: "WG#2024-005",
-                    big: "Rs 89,200",
-                    small: "Rs 124,560",
-                    result: "Small Won",
-                    margin: "+6.3%",
-                  },
-                ].map((row, idx) => (
-                  <tr key={idx} className="border-b border-[#0f3460] hover:bg-[#0f3460] transition-colors">
-                    <td className="text-gray-300 py-3 px-4">{row.time}</td>
-                    <td className="text-white font-medium py-3 px-4">{row.round}</td>
-                    <td className="text-[#3b82f6] py-3 px-4">{row.big}</td>
-                    <td className="text-[#4ade80] py-3 px-4">{row.small}</td>
-                    <td className="py-3 px-4">
-                      <span className={`font-bold ${row.result === "Big Won" ? "text-[#3b82f6]" : "text-[#4ade80]"}`}>
-                        {row.result}
-                      </span>
-                    </td>
-                    <td className={`font-bold py-3 px-4 ${row.margin.startsWith("+") ? "text-[#4ade80]" : "text-[#ef4444]"}`}>
-                      {row.margin}
-                    </td>
+                {loadingRounds ? (
+                  <tr>
+                    <td colSpan={5} className="text-center text-gray-400 py-6">Loading recent rounds...</td>
                   </tr>
-                ))}
+                ) : recentRounds.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="text-center text-gray-400 py-6">No round history available.</td>
+                  </tr>
+                ) : (
+                  recentRounds.map((row) => {
+                    const resultColor = row.result_size === 'BIG' ? 'text-[#3b82f6]' : 'text-[#4ade80]';
+                    return (
+                      <tr key={row.id} className="border-b border-[#0f3460] hover:bg-[#0f3460] transition-colors">
+                        <td className="text-white py-3 px-4">{row.id}</td>
+                        <td className={`py-3 px-4 text-sm font-semibold ${resultColor}`}>
+                          {row.result_size || row.forced_outcome || row.manual_result || 'Pending'}
+                        </td>
+                        <td className="text-[#fbbf24] py-3 px-4">Rs {Number(row.total_big || 0).toLocaleString()}</td>
+                        <td className="text-[#38bdf8] py-3 px-4">Rs {Number(row.total_small || 0).toLocaleString()}</td>
+                        <td className="text-gray-300 py-3 px-4">{row.status || 'completed'}</td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>

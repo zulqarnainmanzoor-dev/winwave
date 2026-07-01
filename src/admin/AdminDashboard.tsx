@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { AdminProvider, useAdmin } from "./context/AdminContext";
 import { Sidebar } from "./components/Sidebar";
+import { GiftCodes } from "./pages/GiftCodes";
 import { DashboardOverview } from "./pages/DashboardOverview";
 import { GamePage } from "./pages/GamePage";
 import { MemberManagement } from "./pages/MemberManagement";
@@ -10,7 +11,15 @@ import { AgentManagement } from "./pages/AgentManagement";
 import { Settings } from "./pages/Settings";
 
 function AdminDashboardContent() {
-  const { currentPage } = useAdmin();
+  const { currentPage, setAdminRole } = useAdmin();
+
+  // Initialize admin role from sessionStorage on mount
+  useEffect(() => {
+    const adminRole = sessionStorage.getItem('admin_role');
+    if (adminRole === 'main-admin' || adminRole === 'sub-admin') {
+      setAdminRole(adminRole);
+    }
+  }, [setAdminRole]);
 
   const renderPage = () => {
     switch (currentPage) {
@@ -62,6 +71,8 @@ function AdminDashboardContent() {
         return <FundsManagement type="deposit" />;
       case "withdraw-requests":
         return <FundsManagement type="withdraw" />;
+      case "gift-codes":
+        return <GiftCodes />;
       case "agents":
         return <AgentManagement />;
       case "settings":
@@ -72,9 +83,11 @@ function AdminDashboardContent() {
   };
 
   return (
-    <div className="flex h-screen bg-[#0f0f1e]">
+    <div className="min-h-screen w-full flex flex-col lg:flex-row bg-[#0f172a] text-white">
       <Sidebar />
-      {renderPage()}
+      <main className="flex-1 min-h-screen overflow-auto pt-16 md:pt-0 lg:pt-0">
+        {renderPage()}
+      </main>
     </div>
   );
 }

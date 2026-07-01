@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState } from "react";
 
+export type AdminRole = "main-admin" | "sub-admin";
+
 export type AdminPage = 
   | "overview"
   | "wingo"
@@ -13,6 +15,7 @@ export type AdminPage =
   | "members"
   | "withdraw-requests"
   | "deposit-requests"
+  | "gift-codes"
   | "agents"
   | "settings";
 
@@ -39,6 +42,10 @@ interface GameModeSettings {
 interface AdminContextType {
   currentPage: AdminPage;
   setCurrentPage: (page: AdminPage) => void;
+  
+  // Admin role
+  adminRole: AdminRole;
+  setAdminRole: (role: AdminRole) => void;
   
   // Game settings
   gameSettings: { [key: string]: GameControlSettings };
@@ -105,6 +112,7 @@ const defaultGameSettings: GameControlSettings = {
 
 export function AdminProvider({ children }: { children: React.ReactNode }) {
   const [currentPage, setCurrentPage] = useState<AdminPage>("overview");
+  const [adminRole, setAdminRole] = useState<AdminRole>("main-admin");
   
   const [gameSettings, setGameSettings] = useState<{ [key: string]: GameControlSettings }>({
     wingo: { ...defaultGameSettings, gameType: "wingo" },
@@ -167,6 +175,8 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
     <AdminContext.Provider
       value={{
         currentPage,
+        adminRole,
+        setAdminRole,
         setCurrentPage,
         gameSettings,
         updateGameSettings,

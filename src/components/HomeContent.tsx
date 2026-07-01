@@ -44,92 +44,269 @@ const generateLeaderboardUsers = () => {
 
 const LEADERBOARD_MEMBERS = generateLeaderboardUsers();
 
+// Game visibility array - all games are visible by default
+// Use visibleGames.includes(game.name) to hide under-maintenance games
+const VISIBLE_GAMES = [
+  'Win Go',
+  'Aviator',
+  'Cricket', 
+  'Mines Pro',
+  'Mines',
+  'Spride Aviator',
+];
+
 export default function HomeContent({
   onWinGoClick,
 }: {
   onWinGoClick?: () => void;
 }) {
   const [showMaintenance, setShowMaintenance] = useState(false);
+  const [maintenanceGame, setMaintenanceGame] = useState('');
 
-  // Games under maintenance - completely hidden
-  const MAINTENANCE_GAMES = [
-    'K3',
-    '5D',
-    'TRX Win',
-    'AVIATOR',
-    'BOOM',
-    'GOAL',
-    'CRICKET',
-    'MINES PRO',
-    'HOTLINE',
-    'KENO',
-    'WG',
-    'SEXY',
-    'MG LIVE',
-    'EVOLUTION',
-    'EZUGI',
-  ];
+  // Check if a game is in the visible list
+  const isGameVisible = (gameName: string) => {
+    return VISIBLE_GAMES.includes(gameName);
+  };
+
+  // Handle click on visible games that aren't WinGo
+  const handleVisibleGameClick = (gameName: string) => {
+    setMaintenanceGame(gameName);
+    setShowMaintenance(true);
+  };
 
   return (
     <div className="px-4 flex flex-col gap-6 pb-6 relative">
-      {/* Lottery */}
+      {/* Lottery Section - always visible, all games with proper posters */}
       <section>
         <SectionHeader
           title="Lottery"
           icon={<Dices className="w-5 h-5 text-amber-500" />}
         />
         <GameGrid cols={2}>
-          <div
-            className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
-            onClick={onWinGoClick}
-          >
-            <div className="absolute inset-0 bg-gradient-to-br from-[#D94C4C] to-[#8C2323]" />
-            <img
-              src="assets/Games Sections/Popular Games/WinGo 1Min.webp"
-              alt="Win Go"
-              className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
-            <div className="absolute inset-x-0 bottom-0 p-3 z-10">
-              <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">Win Go</div>
-              <div className="text-white font-black text-xl leading-tight">Win Go</div>
+          {/* Win Go - already has poster */}
+          {isGameVisible('Win Go') && (
+            <div
+              className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
+              onClick={onWinGoClick}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-[#D94C4C] to-[#8C2323]" />
+              <img
+                src="assets/Games Sections/Popular Games/WinGo 1Min.webp"
+                alt="Win Go"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-3 z-10">
+                <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">Win Go</div>
+                <div className="text-white font-black text-xl leading-tight">Win Go</div>
+              </div>
             </div>
-          </div>
-          {/* K3 - Under maintenance */}
-          {/* 5D - Under maintenance */}
-          {/* TRX Win - Under maintenance */}
+          )}
+          {/* Aviator - with poster from Recommended Games */}
+          {isGameVisible('Aviator') && (
+            <div
+              className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
+              onClick={() => handleVisibleGameClick('Aviator')}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-[#1a4c8c] to-[#0d2b5c]" />
+              <img
+                src="assets/Games Sections/Recommended Games/Aviator.webp"
+                alt="Aviator"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-3 z-10">
+                <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">Popular</div>
+                <div className="text-white font-black text-xl leading-tight">Aviator</div>
+              </div>
+            </div>
+          )}
+          {/* Cricket - with poster from Popular Games */}
+          {isGameVisible('Cricket') && (
+            <div
+              className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
+              onClick={() => handleVisibleGameClick('Cricket')}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-[#2d5c2d] to-[#143014]" />
+              <img
+                src="assets/Games Sections/Popular Games/Cricket.webp"
+                alt="Cricket"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-3 z-10">
+                <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">Sports</div>
+                <div className="text-white font-black text-xl leading-tight">Cricket</div>
+              </div>
+            </div>
+          )}
+          {/* Mines Pro - with poster from Recommended Games */}
+          {isGameVisible('Mines Pro') && (
+            <div
+              className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
+              onClick={() => handleVisibleGameClick('Mines Pro')}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-[#6b3a8a] to-[#3a1a5c]" />
+              <img
+                src="assets/Games Sections/Recommended Games/Mines Pro.webp"
+                alt="Mines Pro"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-3 z-10">
+                <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">Mines</div>
+                <div className="text-white font-black text-xl leading-tight">Mines Pro</div>
+              </div>
+            </div>
+          )}
+          {/* Mines - with poster from Popular Games */}
+          {isGameVisible('Mines') && (
+            <div
+              className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
+              onClick={() => handleVisibleGameClick('Mines')}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-[#8a6b3a] to-[#5c3a1a]" />
+              <img
+                src="assets/Games Sections/Popular Games/Mines.webp"
+                alt="Mines"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-3 z-10">
+                <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">Classic</div>
+                <div className="text-white font-black text-xl leading-tight">Mines</div>
+              </div>
+            </div>
+          )}
+          {/* Spride Aviator - with poster from Popular Games */}
+          {isGameVisible('Spride Aviator') && (
+            <div
+              className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
+              onClick={() => handleVisibleGameClick('Spride Aviator')}
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-[#c44c2d] to-[#8c2d1a]" />
+              <img
+                src="assets/Games Sections/Popular Games/Spribe Aviator.webp"
+                alt="Spride Aviator"
+                className="absolute inset-0 w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+              <div className="absolute inset-x-0 bottom-0 p-3 z-10">
+                <div className="text-amber-500 font-black tracking-widest text-[10px] uppercase">Crash</div>
+                <div className="text-white font-black text-xl leading-tight">Spride Aviator</div>
+              </div>
+            </div>
+          )}
         </GameGrid>
       </section>
 
-      {/* Recommended Games */}
+      {/* Recommended Games - always visible */}
       <section>
         <SectionHeader
           title="Recommended Games"
           icon={<Crown className="w-5 h-5 text-amber-500" />}
         />
         <GameGrid cols={3}>
-          {/* Recommended Game Logos - Only show WIN GO (others under maintenance) */}
           <GameCard
             title="WIN GO"
             img="assets/Games Sections/Recommended Games/WinGo.webp"
             bgColor="bg-[#2B2735]"
             onClick={onWinGoClick}
           />
-          {/* AVIATOR - Under maintenance */}
-          {/* BOOM - Under maintenance */}
-          {/* GOAL - Under maintenance */}
-          {/* CRICKET - Under maintenance */}
-          {/* MINES PRO - Under maintenance */}
+          {isGameVisible('Aviator') && (
+            <GameCard
+              title="AVIATOR"
+              img="assets/Games Sections/Recommended Games/Aviator.webp"
+              bgColor="bg-[#1C2A3D]"
+              onClick={() => handleVisibleGameClick('Aviator')}
+            />
+          )}
+          {isGameVisible('Cricket') && (
+            <GameCard
+              title="CRICKET"
+              img="assets/Games Sections/Recommended Games/Cricket.webp"
+              bgColor="bg-[#1C3D1C]"
+              onClick={() => handleVisibleGameClick('Cricket')}
+            />
+          )}
+          {isGameVisible('Mines Pro') && (
+            <GameCard
+              title="MINES PRO"
+              img="assets/Games Sections/Recommended Games/Mines Pro.webp"
+              bgColor="bg-[#2D1C3D]"
+              onClick={() => handleVisibleGameClick('Mines Pro')}
+            />
+          )}
+          {isGameVisible('Mines') && (
+            <GameCard
+              title="MINES"
+              img="assets/Games Sections/Popular Games/Mines.webp"
+              bgColor="bg-[#3D3D1C]"
+              onClick={() => handleVisibleGameClick('Mines')}
+            />
+          )}
+          {isGameVisible('Spride Aviator') && (
+            <GameCard
+              title="SPRIDE AVIATOR"
+              img="assets/Games Sections/Recommended Games/Aviator.webp"
+              bgColor="bg-[#3D1C1C]"
+              onClick={() => handleVisibleGameClick('Spride Aviator')}
+            />
+          )}
         </GameGrid>
       </section>
 
-      {/* Mini games - All under maintenance, section hidden */}
-      {/* Casino - All under maintenance, section hidden */}
-      {/* Slots - All under maintenance, section hidden */}
-      {/* Sports - All under maintenance, section hidden */}
+      {/* Mini Games - always visible, with posters */}
+      <section>
+        <SectionHeader
+          title="Mini Games"
+          icon={<Sparkles className="w-5 h-5 text-amber-500" />}
+        />
+        <GameGrid cols={3}>
+          {isGameVisible('Mines') && (
+            <GameCard
+              title="MINES"
+              img="assets/Games Sections/Popular Games/Mines.webp"
+              bgColor="bg-[#2B2735]"
+              onClick={() => handleVisibleGameClick('Mines')}
+            />
+          )}
+          {isGameVisible('Mines Pro') && (
+            <GameCard
+              title="MINES PRO"
+              img="assets/Games Sections/Recommended Games/Mines Pro.webp"
+              bgColor="bg-[#1C2A3D]"
+              onClick={() => handleVisibleGameClick('Mines Pro')}
+            />
+          )}
+          {isGameVisible('Aviator') && (
+            <GameCard
+              title="AVIATOR"
+              img="assets/Games Sections/Recommended Games/Aviator.webp"
+              bgColor="bg-[#1C3D1C]"
+              onClick={() => handleVisibleGameClick('Aviator')}
+            />
+          )}
+          {isGameVisible('Spride Aviator') && (
+            <GameCard
+              title="SPRIDE AVIATOR"
+              img="assets/Games Sections/Popular Games/Spribe Aviator.webp"
+              bgColor="bg-[#2D1C3D]"
+              onClick={() => handleVisibleGameClick('Spride Aviator')}
+            />
+          )}
+          {isGameVisible('Cricket') && (
+            <GameCard
+              title="CRICKET"
+              img="assets/Games Sections/Recommended Games/Cricket.webp"
+              bgColor="bg-[#3D3D1C]"
+              onClick={() => handleVisibleGameClick('Cricket')}
+            />
+          )}
+        </GameGrid>
+      </section>
 
       {/* Promo Banners */}
-
       <div className="flex gap-3">
         <div className="flex-1 rounded-xl bg-gradient-to-r from-[#2a2a2a] to-[#1a1a1a] border border-[#ffcc00]/20 p-3 flex items-center justify-between cursor-pointer group">
           <span className="text-white font-bold text-xs w-1/2">
@@ -148,11 +325,6 @@ export default function HomeContent({
           </div>
         </div>
       </div>
-
-
-      {/* Sports - All under maintenance, section hidden */}
-      {/* Rummy - All under maintenance, section hidden */}
-      {/* Fishing - All under maintenance, section hidden */}
 
       {/* Super Jackpot */}
       <section className="bg-[#1C1C1F] border border-white/5 rounded-xl p-4 flex flex-col gap-3">
@@ -197,11 +369,9 @@ export default function HomeContent({
         <div className="flex items-end justify-center gap-3.5 h-44 mb-6">
           {/* Rank 2 */}
           <div className="w-[30%] flex flex-col items-center">
-            {/* Avatar block */}
             <div className="w-12 h-12 rounded-full border border-slate-400 bg-slate-950/80 z-10 flex items-center justify-center mb-[-8px] shadow-lg relative">
               <span className="text-slate-400 text-[10px] font-extrabold tracking-tight">NO.2</span>
             </div>
-            {/* Podium Bar */}
             <div className="w-full bg-gradient-to-t from-[#151518] to-[#1F2123] border-t border-slate-400 rounded-t-2xl pt-4 pb-2 flex flex-col items-center h-28 shadow-xl">
               <span className="text-gray-400 text-[9px] font-bold truncate w-full text-center px-1">
                 Zah***88
@@ -217,12 +387,10 @@ export default function HomeContent({
 
           {/* Rank 1 */}
           <div className="w-[36%] flex flex-col items-center">
-            {/* Avatar block with absolute Crown icon */}
             <div className="w-16 h-16 rounded-full border-2 border-amber-500 bg-amber-950/30 z-10 flex items-center justify-center mb-[-12px] shadow-[0_0_15px_rgba(245,158,11,0.25)] relative">
               <Crown className="w-5 h-5 text-[#ffa502] absolute -top-4 animate-bounce" style={{ animationDuration: '3s' }} />
               <span className="text-amber-500 text-[11px] font-extrabold tracking-tight">NO.1</span>
             </div>
-            {/* Podium Bar */}
             <div className="w-full bg-gradient-to-t from-[#151518] to-[#3a2a1a] border-t-2 border-amber-500 rounded-t-2xl pt-5 pb-2 flex flex-col items-center h-36 shadow-xl relative overflow-hidden">
               <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-amber-500 to-[#ffa502] opacity-80" />
               <span className="text-gray-200 text-[10px] font-black truncate w-full text-center px-1">
@@ -239,11 +407,9 @@ export default function HomeContent({
 
           {/* Rank 3 */}
           <div className="w-[30%] flex flex-col items-center">
-            {/* Avatar block */}
             <div className="w-12 h-12 rounded-full border border-amber-800 bg-amber-950/80 z-10 flex items-center justify-center mb-[-8px] shadow-lg relative">
               <span className="text-amber-700 text-[10px] font-extrabold tracking-tight">NO.3</span>
             </div>
-            {/* Podium Bar */}
             <div className="w-full bg-gradient-to-t from-[#151518] to-[#221C16] border-t border-amber-700 rounded-t-2xl pt-4 pb-2 flex flex-col items-center h-24 shadow-xl">
               <span className="text-gray-400 text-[9px] font-bold truncate w-full text-center px-1">
                 Ali***77
@@ -327,11 +493,10 @@ export default function HomeContent({
                 <Wrench className="w-7 h-7 text-[#ffa502]" />
               </div>
               <h2 className="text-white text-lg font-black tracking-wide uppercase mb-2">
-                Under Maintenance
+                {maintenanceGame} - Coming Soon
               </h2>
               <p className="text-gray-400 text-xs font-medium leading-relaxed">
-                This game is currently undergoing maintenance. Please try again
-                later.
+                This game is currently under development. Please check back later.
               </p>
             </div>
 

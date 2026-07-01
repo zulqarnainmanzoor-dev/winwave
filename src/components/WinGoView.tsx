@@ -372,7 +372,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-[#1A1A1D] h-screen overflow-y-auto pb-20 relative">
+    <div className="flex-1 flex flex-col bg-[#1A1A1D] min-h-screen overflow-y-auto pb-20 relative">
       {/* Header */}
       <div className="flex items-center justify-between p-4 sticky top-0 bg-[#1A1A1D] z-40 border-b border-white/5">
         <ChevronLeft
@@ -441,8 +441,16 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
           </div>
 
           <div className="flex gap-4 relative z-10">
-            <button className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm" onClick={() => {}}>\r\n              Withdraw\r\n            </button>
-            <button className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm">
+            <button
+              className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm"
+              onClick={() => { window.location.hash = '#/withdraw'; }}
+            >
+              Withdraw
+            </button>
+            <button
+              className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm"
+              onClick={() => { window.location.hash = '#/deposit'; }}
+            >
               Deposit
             </button>
           </div>

@@ -1,5 +1,21 @@
-import React, { useState } from "react";
-import { UserPlus, Target, CheckCircle } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { UserPlus, Target, CheckCircle, Copy, Check } from "lucide-react";
+import { supabase } from "../../lib/supabaseClient";
+
+interface AgentData {
+  id: string;
+  phone: string;
+  main_balance: number;
+  game_balance: number;
+  vip_level: number;
+  invite_code: string;
+  total_bets: number;
+  created_at: string;
+  direct_members: number;
+  team_members: number;
+  yesterday_commission: number;
+  status: "active" | "suspended";
+}
 
 interface Agent {
   uid: string;
@@ -48,205 +64,344 @@ const MOCK_MEMBERS_TO_PROMOTE = [
 ];
 
 export function AgentManagement() {
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [showPromoteModal, setShowPromoteModal] = useState(false);
-  const [selectedForPromotion, setSelectedForPromotion] = useState<string | null>(null);
+  const [agentUID, setAgentUID] = useState('');
+  const [agentData, setAgentData] = useState<AgentData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [salaryAmount, setSalaryAmount] = useState('');
+  const [advanceAmount, setAdvanceAmount] = useState('');
+  const [showSalaryModal, setShowSalaryModal] = useState(false);
+  const [showAdvanceModal, setShowAdvanceModal] = useState(false);
+
+  // Fetch agent data from Supabase
+  const handleFetchAgent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setAgentData(null);
+    setLoading(true);
+
+    try {
+      // Query Supabase for user by phone or invite_code
+      const { data, error: fetchError } = await supabase
+        .from('users')
+        .select('*')
+        .or(`phone.eq.${agentUID},invite_code.eq.${agentUID}`)
+        .single();
+
+      if (fetchError || !data) {
+        setError('Agent not found in system');
+        setLoading(false);
+        return;
+      }
+
+      // Count direct members (people who used this agent's invite_code)
+      const { data: directMembers, error: directError } = await supabase
+        .from('users')
+        .select('id', { count: 'exact', head: true })
+        .eq('referred_by', data.id);
+
+      // Count team members (members of direct members)
+      const { data: teamMembers, error: teamError } = await supabase
+        .from('users')
+        .select('id', { count: 'exact', head: true })
+        .neq('referred_by', null)
+        .not('id', 'eq', data.id);
+
+      const agentInfo: AgentData = {
+        id: data.id,
+        phone: data.phone_number || '',
+        main_balance: data.main_balance || 0,
+        game_balance: data.game_balance || 0,
+        vip_level: data.vip_level || 0,
+        invite_code: data.invite_code || '',
+        total_bets: data.total_bets || 0,
+        created_at: data.created_at || '',
+        direct_members: directMembers?.length || 0,
+        team_members: teamMembers?.length || 0,
+        yesterday_commission: 0, // This would come from transactions table
+        status: 'active'
+      };
+
+      setAgentData(agentInfo);
+    } catch (err) {
+      setError('Failed to fetch agent data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const copyUID = () => {
+    if (agentData?.invite_code) {
+      navigator.clipboard.writeText(agentData.invite_code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleGiveSalary = async () => {
+    if (!agentData || !salaryAmount) return;
+
+    try {
+      // Add salary to agent's main balance
+      const newBalance = agentData.main_balance + parseFloat(salaryAmount);
+      
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ main_balance: newBalance })
+        .eq('id', agentData.id);
+
+      if (!updateError) {
+        setAgentData({ ...agentData, main_balance: newBalance });
+        setSalaryAmount('');
+        setShowSalaryModal(false);
+        alert('Salary transferred successfully!');
+      }
+    } catch (err) {
+      alert('Failed to transfer salary');
+    }
+  };
+
+  const handleGiveAdvance = async () => {
+    if (!agentData || !advanceAmount) return;
+
+    try {
+      // Add advance to agent's game balance
+      const newBalance = agentData.game_balance + parseFloat(advanceAmount);
+      
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ game_balance: newBalance })
+        .eq('id', agentData.id);
+
+      if (!updateError) {
+        setAgentData({ ...agentData, game_balance: newBalance });
+        setAdvanceAmount('');
+        setShowAdvanceModal(false);
+        alert('Advance released successfully!');
+      }
+    } catch (err) {
+      alert('Failed to release advance');
+    }
+  };
 
   return (
-    <div className="flex-1 overflow-auto">
-      <div className="p-8">
+    <div className="flex-1 overflow-auto bg-[#0a0a0b] min-h-screen">
+      <div className="w-full p-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Agent Management</h1>
-          <p className="text-gray-400">Manage agents, track referrals, and approve withdrawals</p>
+          <h1 className="text-4xl font-bold text-white mb-2">Agent Management</h1>
+          <p className="text-gray-400">Search, manage agents, and handle commissions</p>
         </div>
 
-        <div className="grid grid-cols-3 gap-8">
-          {/* Agents List */}
-          <div className="col-span-2 space-y-6">
-            {/* Promote User Card */}
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-10 h-10 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center">
-                  <UserPlus className="w-5 h-5 text-white" />
-                </div>
-                <h3 className="text-white font-bold text-lg">Promote User to Agent</h3>
+        <div className="grid grid-cols-4 gap-8 h-[calc(100vh-180px)]">
+          {/* Search & Input Panel */}
+          <div className="col-span-1 bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] overflow-y-auto">
+            <h3 className="text-white font-bold text-lg mb-4">Find Agent</h3>
+            
+            <form onSubmit={handleFetchAgent} className="space-y-4">
+              <div>
+                <label className="text-gray-400 text-sm block mb-2">Agent UID or Phone</label>
+                <input
+                  type="text"
+                  value={agentUID}
+                  onChange={(e) => setAgentUID(e.target.value)}
+                  placeholder="e.g., UID#10001 or 03001111111"
+                  className="w-full bg-[#0f3460] border border-[#1a5f7a] text-white px-4 py-2 rounded-lg focus:border-amber-500 focus:outline-none"
+                />
               </div>
-              <button
-                onClick={() => setShowPromoteModal(true)}
-                className="w-full py-3 px-4 bg-gradient-to-r from-[#3b82f6] to-[#1d4ed8] text-white rounded-lg hover:shadow-lg hover:shadow-blue-500/30 transition-all font-medium"
-              >
-                Select Member to Promote
-              </button>
-            </div>
 
-            {/* Agents Table */}
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460] overflow-hidden">
-              <div className="p-6 border-b border-[#0f3460]">
-                <h3 className="text-white font-bold text-lg">Active Agents ({MOCK_AGENTS.length})</h3>
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-2 bg-gradient-to-r from-amber-500 to-amber-600 text-white font-bold rounded-lg hover:shadow-lg hover:shadow-amber-500/30 disabled:opacity-50 transition-all"
+              >
+                {loading ? 'Searching...' : 'Search Agent'}
+              </button>
+            </form>
+
+            {error && (
+              <div className="mt-4 p-3 bg-red-500/20 border border-red-500/50 text-red-400 rounded-lg text-sm">
+                {error}
               </div>
-              <div className="divide-y divide-[#0f3460]">
-                {MOCK_AGENTS.map((agent) => (
-                  <div
-                    key={agent.uid}
-                    onClick={() => setSelectedAgent(agent)}
-                    className={`p-6 cursor-pointer transition-all ${
-                      selectedAgent?.uid === agent.uid
-                        ? "bg-[#0f3460] border-l-4 border-[#e94560]"
-                        : "hover:bg-[#0f3460]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between mb-4">
-                      <div>
-                        <p className="text-white font-bold text-lg">{agent.username}</p>
-                        <p className="text-gray-400 text-sm">{agent.uid} • {agent.phone}</p>
-                      </div>
-                      <div
-                        className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          agent.status === "active"
-                            ? "bg-[#4ade80]/20 text-[#4ade80]"
-                            : "bg-[#ef4444]/20 text-[#ef4444]"
-                        }`}
-                      >
-                        {agent.status}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-4 gap-4">
-                      <div className="bg-[#0f3460] rounded p-3">
-                        <p className="text-gray-400 text-xs">Real Members</p>
-                        <p className="text-white font-bold">{agent.realMembers}</p>
-                      </div>
-                      <div className="bg-[#0f3460] rounded p-3">
-                        <p className="text-gray-400 text-xs">Fake Members</p>
-                        <p className="text-white font-bold">{agent.fakeMembers}</p>
-                      </div>
-                      <div className="bg-[#0f3460] rounded p-3">
-                        <p className="text-gray-400 text-xs">Total Referrals</p>
-                        <p className="text-white font-bold">{agent.totalReferrals}</p>
-                      </div>
-                      <div className="bg-[#0f3460] rounded p-3">
-                        <p className="text-gray-400 text-xs">Commission</p>
-                        <p className="text-[#fbbf24] font-bold">Rs {agent.totalCommission.toLocaleString()}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Agent Details Panel */}
-          {selectedAgent && (
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460] p-6 h-fit">
-              <h3 className="text-white font-bold text-lg mb-6">Agent Details</h3>
-
-              <div className="space-y-4 mb-6">
+          {agentData ? (
+            <div className="col-span-3 space-y-6">
+              {/* Agent Info Card */}
+              <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] grid grid-cols-4 gap-4">
                 <div>
-                  <p className="text-gray-400 text-sm">Username</p>
-                  <p className="text-white font-bold">{selectedAgent.username}</p>
+                  <p className="text-gray-400 text-sm mb-1">Phone</p>
+                  <p className="text-white font-bold text-lg">{agentData.phone}</p>
                 </div>
                 <div>
-                  <p className="text-gray-400 text-sm">Phone</p>
-                  <p className="text-white">{selectedAgent.phone}</p>
+                  <p className="text-gray-400 text-sm mb-1">VIP Level</p>
+                  <p className="text-amber-500 font-bold text-lg">{agentData.vip_level}</p>
                 </div>
                 <div>
-                  <p className="text-gray-400 text-sm">Promoted On</p>
-                  <p className="text-white">{selectedAgent.promotedDate}</p>
+                  <p className="text-gray-400 text-sm mb-1">Member Since</p>
+                  <p className="text-white font-bold text-lg">{new Date(agentData.created_at).toLocaleDateString()}</p>
+                </div>
+                <div>
+                  <p className="text-gray-400 text-sm mb-1">Status</p>
+                  <p className="text-green-400 font-bold text-lg">Active</p>
                 </div>
               </div>
 
-              {/* Stats */}
-              <div className="bg-[#0f3460] rounded-lg p-4 mb-6 space-y-3">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Real Members:</span>
-                  <span className="text-white font-bold">{selectedAgent.realMembers}</span>
+              {/* Referral & Commission Stats */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                  <p className="text-gray-400 text-sm mb-2">Direct Members</p>
+                  <p className="text-white font-bold text-3xl">{agentData.direct_members}</p>
+                  <p className="text-gray-500 text-xs mt-2">People who joined via this agent's link</p>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Fake Members:</span>
-                  <span className="text-white font-bold">{selectedAgent.fakeMembers}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Total Referrals:</span>
-                  <span className="text-white font-bold">{selectedAgent.totalReferrals}</span>
-                </div>
-                <div className="flex justify-between pt-3 border-t border-[#1a5f7a]">
-                  <span className="text-gray-400">Total Commission:</span>
-                  <span className="text-[#fbbf24] font-bold">Rs {selectedAgent.totalCommission.toLocaleString()}</span>
-                </div>
-              </div>
 
-              {/* Pending Withdrawals */}
-              {selectedAgent.withdrawalsPending > 0 && (
-                <div className="bg-[#fbbf24]/20 border border-[#fbbf24]/50 rounded-lg p-4 mb-6">
-                  <p className="text-[#fbbf24] font-bold mb-2">Pending Withdrawals: {selectedAgent.withdrawalsPending}</p>
-                  <button className="w-full py-2 text-sm bg-[#fbbf24]/30 text-[#fbbf24] rounded hover:bg-[#fbbf24]/40 transition-all font-medium">
-                    Review Pending
+                <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                  <p className="text-gray-400 text-sm mb-2">Team Members</p>
+                  <p className="text-white font-bold text-3xl">{agentData.team_members}</p>
+                  <p className="text-gray-500 text-xs mt-2">Indirect referrals (team's referrals)</p>
+                </div>
+
+                <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                  <p className="text-gray-400 text-sm mb-2">Yesterday Commission</p>
+                  <p className="text-amber-500 font-bold text-3xl">Rs {agentData.yesterday_commission.toLocaleString()}</p>
+                  <button
+                    className="w-full mt-3 py-2 bg-amber-500/30 text-amber-400 border border-amber-500/50 rounded-lg hover:bg-amber-500/40 transition-all text-sm font-bold"
+                  >
+                    Claim
                   </button>
                 </div>
-              )}
-
-              {/* Actions */}
-              <div className="space-y-3">
-                <button className="w-full py-2 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all font-medium text-sm">
-                  View Referrals
-                </button>
-                <button className="w-full py-2 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all font-medium text-sm">
-                  View Commission History
-                </button>
-                <button className="w-full py-2 px-4 bg-[#ef4444]/20 text-[#ef4444] rounded-lg border border-[#ef4444]/50 hover:bg-[#ef4444]/30 transition-all font-medium text-sm">
-                  Suspend Agent
-                </button>
               </div>
+
+              {/* Balances */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                  <p className="text-gray-400 text-sm mb-2">Main Balance</p>
+                  <p className="text-white font-bold text-2xl">Rs {agentData.main_balance.toLocaleString()}</p>
+                  <button
+                    onClick={() => setShowSalaryModal(true)}
+                    className="w-full mt-3 py-2 bg-blue-500/30 text-blue-400 border border-blue-500/50 rounded-lg hover:bg-blue-500/40 transition-all text-sm font-bold"
+                  >
+                    Give Salary
+                  </button>
+                </div>
+
+                <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                  <p className="text-gray-400 text-sm mb-2">Game Balance</p>
+                  <p className="text-white font-bold text-2xl">Rs {agentData.game_balance.toLocaleString()}</p>
+                  <button
+                    onClick={() => setShowAdvanceModal(true)}
+                    className="w-full mt-3 py-2 bg-green-500/30 text-green-400 border border-green-500/50 rounded-lg hover:bg-green-500/40 transition-all text-sm font-bold"
+                  >
+                    Release Advance
+                  </button>
+                </div>
+              </div>
+
+              {/* Invitation Link */}
+              <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                <p className="text-gray-400 text-sm mb-3">Agent Invitation Code</p>
+                <div className="flex gap-3">
+                  <input
+                    type="text"
+                    value={agentData.invite_code}
+                    readOnly
+                    className="flex-1 bg-[#0f3460] border border-[#1a5f7a] text-white px-4 py-2 rounded-lg"
+                  />
+                  <button
+                    onClick={copyUID}
+                    className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                      copied
+                        ? 'bg-green-500 text-white'
+                        : 'bg-amber-500/30 text-amber-400 border border-amber-500/50 hover:bg-amber-500/40'
+                    }`}
+                  >
+                    {copied ? <Check size={20} /> : <Copy size={20} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="col-span-3 flex items-center justify-center bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460]">
+              <p className="text-gray-500 text-lg">Enter an agent UID or phone to view details</p>
             </div>
           )}
         </div>
 
-        {/* Promote Modal */}
-        {showPromoteModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] max-w-2xl w-full mx-4">
-              <h3 className="text-white font-bold text-lg mb-6">Select Member to Promote</h3>
-
-              <div className="space-y-3 mb-6 max-h-64 overflow-y-auto">
-                {MOCK_MEMBERS_TO_PROMOTE.map((member) => (
-                  <div
-                    key={member.uid}
-                    onClick={() => setSelectedForPromotion(member.uid)}
-                    className={`p-4 rounded-lg cursor-pointer transition-all border ${
-                      selectedForPromotion === member.uid
-                        ? "bg-[#e94560]/20 border-[#e94560]"
-                        : "bg-[#0f3460] border-[#1a5f7a] hover:border-[#e94560]"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-white font-bold">{member.username}</p>
-                        <p className="text-gray-400 text-sm">{member.uid} • {member.phone}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-white font-bold">{member.referrals} referrals</p>
-                        <p className="text-[#fbbf24] text-sm">Rs {member.commission.toLocaleString()}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+        {/* Salary Modal */}
+        {showSalaryModal && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="w-full max-w-md md:max-w-lg mx-auto rounded-2xl border border-[#0f3460] bg-gradient-to-br from-[#1a1a2e] to-[#16213e] p-6">
+              <h3 className="text-white font-bold text-xl mb-4">Give Salary to Agent</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-gray-400 text-sm block mb-2">Amount (Rs)</label>
+                  <input
+                    type="number"
+                    value={salaryAmount}
+                    onChange={(e) => setSalaryAmount(e.target.value)}
+                    placeholder="Enter amount"
+                    className="w-full bg-[#0f3460] border border-[#1a5f7a] text-white px-4 py-2 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
               </div>
-
-              <div className="flex gap-3">
+              <div className="flex gap-3 mt-6">
                 <button
                   onClick={() => {
-                    setShowPromoteModal(false);
-                    setSelectedForPromotion(null);
+                    setShowSalaryModal(false);
+                    setSalaryAmount('');
                   }}
-                  className="flex-1 py-2 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all"
+                  className="flex-1 py-2 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-red-500 transition-all"
                 >
                   Cancel
                 </button>
                 <button
-                  disabled={!selectedForPromotion}
-                  className="flex-1 py-2 px-4 bg-gradient-to-r from-[#4ade80] to-[#22c55e] text-white rounded-lg hover:shadow-lg disabled:opacity-50 transition-all font-medium"
+                  onClick={handleGiveSalary}
+                  disabled={!salaryAmount}
+                  className="flex-1 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-all font-bold"
                 >
-                  Promote to Agent
+                  Transfer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Advance Modal */}
+        {showAdvanceModal && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+            <div className="w-full max-w-md md:max-w-lg mx-auto rounded-2xl border border-[#0f3460] bg-gradient-to-br from-[#1a1a2e] to-[#16213e] p-6">
+              <h3 className="text-white font-bold text-xl mb-4">Release Advance to Agent</h3>
+              <div className="space-y-4">
+                <div>
+                  <label className="text-gray-400 text-sm block mb-2">Advance Amount (Rs)</label>
+                  <input
+                    type="number"
+                    value={advanceAmount}
+                    onChange={(e) => setAdvanceAmount(e.target.value)}
+                    placeholder="Enter amount"
+                    className="w-full bg-[#0f3460] border border-[#1a5f7a] text-white px-4 py-2 rounded-lg focus:border-green-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  onClick={() => {
+                    setShowAdvanceModal(false);
+                    setAdvanceAmount('');
+                  }}
+                  className="flex-1 py-2 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-red-500 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleGiveAdvance}
+                  disabled={!advanceAmount}
+                  className="flex-1 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 transition-all font-bold"
+                >
+                  Release
                 </button>
               </div>
             </div>

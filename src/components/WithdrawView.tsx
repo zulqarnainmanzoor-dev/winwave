@@ -14,6 +14,7 @@ import {
   KeyRound
 } from "lucide-react";
 import { useUser, PAYMENT_LIMITS } from "../context/UserContext";
+import { supabase } from "../lib/supabaseClient";
 
 export default function WithdrawView({
   onBack,
@@ -22,7 +23,7 @@ export default function WithdrawView({
   onBack: () => void;
   onTransactionClick: () => void;
 }) {
-  const { mainWalletBalance, thirdPartyWalletBalance, totalBalance, setBalance, wageringRequired, wageringCompleted, selectedPaymentMethod, setSelectedPaymentMethod, withdrawalPassword, setWithdrawalPassword: setWithdrawalPasswordContext, boundAccounts, setBoundAccounts } = useUser();
+  const { uid, mainWalletBalance, thirdPartyWalletBalance, totalBalance, setBalance, wageringRequired, wageringCompleted, selectedPaymentMethod, setSelectedPaymentMethod, withdrawalPassword, setWithdrawalPassword: setWithdrawalPasswordContext, boundAccounts, setBoundAccounts } = useUser();
   const [amount, setAmount] = useState<string>("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -40,13 +41,11 @@ export default function WithdrawView({
   const [withdrawCounts, setWithdrawCounts] = useState({
     easypaisa: 0,
     jazzcash: 0,
-    usdt: 0,
   });
 
-  // User can bind exactly 1 account/address per method - use from context
+  // User can bind exactly 1 account per method - use from context
   const [newWalletName, setNewWalletName] = useState("");
   const [newWalletAccount, setNewWalletAccount] = useState("");
-  const [usdtNetwork, setUsdtNetwork] = useState<"TRC20" | "ERC20" | "BEP20">("TRC20");
   const [newWalletRemarks, setNewWalletRemarks] = useState("");
   const [withdrawRemarks, setWithdrawRemarks] = useState("");
 
@@ -181,7 +180,6 @@ export default function WithdrawView({
         name: newWalletName.trim(),
         account: newWalletAccount.trim(),
         remarks: newWalletRemarks.trim() || undefined,
-        ...(selectedPaymentMethod === "usdt" ? { network: usdtNetwork } : {}),
       } as any,
     }));
     setNewWalletName("");
@@ -235,33 +233,38 @@ export default function WithdrawView({
       return;
     }
 
-    // Process actual withdrawal
-    setBalance(totalBalance - withdrawVal);
-    setWithdrawCounts((prev) => ({
-      ...prev,
-      [selectedPaymentMethod]: prev[selectedPaymentMethod] + 1,
-    }));
+    // Process withdrawal: create withdraw_requests row and deduct balance locally
+    (async () => {
+      try {
+        // Deduct main balance locally
+        setBalance(totalBalance - withdrawVal);
+        setWithdrawCounts((prev) => ({
+          ...prev,
+          [selectedPaymentMethod]: prev[selectedPaymentMethod] + 1,
+        }));
 
-    // Save to custom transactions with remarks for future verification
-    try {
-      const newTx = {
-        id: `WD-${Math.floor(1000000 + Math.random() * 9000000)}`,
-        type: "withdraw",
-        amount: withdrawVal,
-        status: "pending",
-        date: new Date().toISOString().replace('T', ' ').substring(0, 19),
-        remarks: withdrawRemarks.trim(),
-        network: selectedPaymentMethod === "usdt" ? (activeWallet as any).network : undefined,
-      };
-      const existing = localStorage.getItem("custom_transactions");
-      const txList = existing ? JSON.parse(existing) : [];
-      txList.unshift(newTx);
-      localStorage.setItem("custom_transactions", JSON.stringify(txList));
-    } catch (e) {
-      console.error(e);
-    }
+        const requestId = `WD-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
+        const userId = (useUser as any) ? (undefined as any) : undefined;
+        const uid = (window as any)?.winwave_uid || undefined;
 
-    setShowSuccessModal(true);
+        const { error: insertError } = await supabase.from('withdraw_requests').insert([{ id: requestId, user_id: uid || null, amount: withdrawVal, bank_name: selectedPaymentMethod.toUpperCase(), account_name: activeWallet?.name || null, account_number: activeWallet?.account || null, status: 'pending', created_at: new Date().toISOString(), reason: withdrawRemarks.trim() } as any]);
+        if (insertError) console.warn('Failed to write withdraw request to DB', insertError);
+
+        // Insert a transaction record representing the pending withdraw
+        try {
+          const txId = `TX-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
+          const { error: txError } = await supabase.from('transactions').insert([{ id: txId, user_id: (userId || uid || null), type: 'withdraw', amount: withdrawVal, status: 'pending', gateway_ref: withdrawRemarks.trim() } as any]);
+          if (txError) console.warn('Failed to insert transaction', txError);
+        } catch (e) {
+          console.warn(e);
+        }
+
+        setShowSuccessModal(true);
+      } catch (e) {
+        console.error('Withdrawal failed', e);
+        alert('Failed to process withdrawal. Please try again later.');
+      }
+    })();
   };
 
   return (
@@ -390,7 +393,7 @@ export default function WithdrawView({
           </div>
         )}
 
-        {/* Payment Methods */}
+        {/* Payment Methods - Jazzcash & Easypaisa Only (USDT removed) */}
         <div className="mt-4">
           <span className="text-gray-800 text-sm font-bold block mb-2">Withdrawal method</span>
           <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
@@ -445,27 +448,6 @@ export default function WithdrawView({
                 </div>
               )}
             </div>
-
-            <div
-              onClick={() => setSelectedPaymentMethod("usdt")}
-              className={`flex-1 min-w-[100px] relative flex flex-col items-center justify-center p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                selectedPaymentMethod === "usdt"
-                  ? "border-[#ffa502] bg-white shadow-sm"
-                  : "border-transparent bg-white shadow-sm opacity-80"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <div className="bg-[#26a17b] rounded-full w-7 h-7 flex items-center justify-center text-white font-bold text-xs">
-                  ₮
-                </div>
-                <span className="font-bold text-xs text-gray-800">USDT</span>
-              </div>
-              {selectedPaymentMethod === "usdt" && (
-                <div className="absolute -bottom-0 -right-0 bg-[#ffa502] rounded-tl-lg rounded-br-sm w-4 h-4 flex items-center justify-center">
-                  <Check className="w-3 h-3 text-white" strokeWidth={3} />
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
@@ -481,11 +463,6 @@ export default function WithdrawView({
                 <div>
                   <div className="flex items-center gap-2">
                     <h4 className="font-bold text-gray-800 text-sm">{activeWallet.name}</h4>
-                    {selectedPaymentMethod === "usdt" && (activeWallet as any).network && (
-                      <span className="text-[9px] bg-[#26a17b]/10 text-[#26a17b] font-bold px-1.5 py-0.5 rounded border border-[#26a17b]/20">
-                        {(activeWallet as any).network}
-                      </span>
-                    )}
                   </div>
                   <p className="text-gray-500 text-xs font-mono">{activeWallet.account}</p>
                 </div>
@@ -563,9 +540,7 @@ export default function WithdrawView({
           </div>
           <div className="flex justify-between">
             <span>Daily Withdrawal Times:</span>
-            <span className="font-bold text-gray-900">
-              {selectedPaymentMethod === "usdt" ? "5" : "3"} times a day
-            </span>
+            <span className="font-bold text-gray-900">3 times a day</span>
           </div>
           <div className="flex justify-between">
             <span>Remaining Daily Withdrawals:</span>
@@ -587,16 +562,16 @@ export default function WithdrawView({
       </div>
 
       {/* Action Button at Bottom */}
-      <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-gradient-to-t from-[#f5f8ff] to-[#f5f8ff]/80 backdrop-blur-sm z-30">
-        <button
-          onClick={handleWithdrawClick}
-          className="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-lg py-3.5 rounded-full shadow-lg shadow-orange-500/30 hover:brightness-110 transition-all cursor-pointer"
-        >
-          Withdraw
-        </button>
+      <div className="fixed inset-x-0 bottom-0 p-4 bg-gradient-to-t from-[#f5f8ff] to-[#f5f8ff]/80 backdrop-blur-sm z-30">
+        <div className="mx-auto w-full max-w-xs">
+          <button
+            onClick={handleWithdrawClick}
+            className="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-lg py-3.5 rounded-full shadow-lg shadow-orange-500/30 hover:brightness-110 transition-all cursor-pointer"
+          >
+            Withdraw
+          </button>
+        </div>
       </div>
-
-
 
       {/* Add New Wallet modal */}
       {showAddWalletModal && (
@@ -614,22 +589,6 @@ export default function WithdrawView({
             <h3 className="font-bold text-lg mb-4 text-white">Add {selectedPaymentMethod.toUpperCase()} Account</h3>
             
             <form onSubmit={handleAddWallet} className="space-y-4">
-              {/* Premium Network Display specifically for USDT (Just TRC20) */}
-              {selectedPaymentMethod === "usdt" && (
-                <div className="bg-gradient-to-br from-[#121c16] to-[#0a120e] border border-emerald-500/30 rounded-xl p-4 shadow-xl">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1 text-left">
-                      <span className="text-[10px] uppercase font-black tracking-wider text-[#26a17b]">USDT Network</span>
-                      <h4 className="text-white text-base font-black tracking-tight">TRC20 (TRON)</h4>
-                      <p className="text-[10px] text-gray-400">Secure blockchain, fast settlement & minimal network fee</p>
-                    </div>
-                    <div className="w-9 h-9 rounded-full bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center">
-                      <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                    </div>
-                  </div>
-                </div>
-              )}
-
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Account Holder Name</label>
                 <input
@@ -644,51 +603,18 @@ export default function WithdrawView({
 
               <div>
                 <div className="flex justify-between items-center mb-1">
-                  <label className="text-xs text-gray-400 block">Account Number / Address</label>
-                  {selectedPaymentMethod === "usdt" && (
-                    <span className="text-[10px] text-amber-500 font-bold">ReadOnly (Use Paste)</span>
-                  )}
+                  <label className="text-xs text-gray-400 block">Account Number</label>
                 </div>
                 
                 <div className="relative">
                   <input
                     type="text"
                     required
-                    readOnly={selectedPaymentMethod === "usdt"}
-                    placeholder={selectedPaymentMethod === "usdt" ? "Click 'Paste Wallet Address'" : "e.g. 03331234567"}
+                    placeholder="e.g. 03331234567"
                     value={newWalletAccount}
                     onChange={(e) => setNewWalletAccount(e.target.value)}
-                    className={`w-full bg-white/5 rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-[#ffa502] text-white ${
-                      selectedPaymentMethod === "usdt" ? "pr-20 cursor-not-allowed bg-white/5 opacity-80" : ""
-                    }`}
+                    className="w-full bg-white/5 rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-[#ffa502] text-white"
                   />
-                  
-                  {selectedPaymentMethod === "usdt" && (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          const text = await navigator.clipboard.readText();
-                          if (text && text.trim().length > 0) {
-                            setNewWalletAccount(text.trim());
-                          } else {
-                            const textFallback = prompt("Please paste your USDT Wallet Address here:");
-                            if (textFallback) {
-                              setNewWalletAccount(textFallback.trim());
-                            }
-                          }
-                        } catch (err) {
-                          const textFallback = prompt("Please paste your USDT Wallet Address here:");
-                          if (textFallback) {
-                            setNewWalletAccount(textFallback.trim());
-                          }
-                        }
-                      }}
-                      className="absolute right-1.5 top-1.5 bottom-1.5 bg-gradient-to-r from-amber-500 to-orange-500 text-black hover:brightness-110 font-black text-[10px] px-2.5 rounded-md uppercase transition-all"
-                    >
-                      Paste
-                    </button>
-                  )}
                 </div>
               </div>
 
@@ -883,4 +809,3 @@ export default function WithdrawView({
     </div>
   );
 }
-

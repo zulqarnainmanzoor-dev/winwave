@@ -6,7 +6,7 @@ const router = Router();
 router.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from('profiles')
+      .from('users')
       .select('id, phone_number, referral_code, referred_by');
 
     if (error) {

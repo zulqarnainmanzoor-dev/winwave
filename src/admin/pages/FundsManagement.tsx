@@ -1,15 +1,24 @@
-import React, { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, X, Clock } from "lucide-react";
+import { supabase } from "../../lib/supabaseClient";
+
+type RequestStatus = "pending" | "approved" | "rejected" | "completed";
 
 interface FundsRequest {
   id: string;
+  userId: string;
   uid: string;
   userName: string;
   amount: number;
   method: string;
   account: string;
   dateRequested: string;
-  status: "pending" | "approved" | "rejected";
+  status: RequestStatus;
+  type: "withdraw" | "deposit";
+  gatewayRef?: string | null;
+  bankName?: string | null;
+  accountName?: string | null;
+  accountNumber?: string | null;
   reason?: string;
 }
 
@@ -17,76 +26,228 @@ interface FundsManagementProps {
   type: "withdraw" | "deposit";
 }
 
-const MOCK_WITHDRAW_REQUESTS: FundsRequest[] = [
-  {
-    id: "WTH#001",
-    uid: "UID#12345",
-    userName: "Player_Alpha",
-    amount: 50000,
-    method: "Jazzcash",
-    account: "03001234567",
-    dateRequested: "2026-06-29 10:30",
-    status: "pending",
-  },
-  {
-    id: "WTH#002",
-    uid: "UID#67890",
-    userName: "Player_Beta",
-    amount: 75000,
-    method: "Easypaisa",
-    account: "3001234567",
-    dateRequested: "2026-06-29 09:15",
-    status: "approved",
-  },
-  {
-    id: "WTH#003",
-    uid: "UID#11111",
-    userName: "Player_Gamma",
-    amount: 25000,
-    method: "USDT",
-    account: "TRx123...789",
-    dateRequested: "2026-06-29 08:45",
-    status: "rejected",
-    reason: "Invalid account address",
-  },
-];
-
-const MOCK_DEPOSIT_REQUESTS: FundsRequest[] = [
-  {
-    id: "DEP#001",
-    uid: "UID#22222",
-    userName: "Player_Delta",
-    amount: 100000,
-    method: "Jazzcash",
-    account: "03009876543",
-    dateRequested: "2026-06-29 11:20",
-    status: "pending",
-  },
-  {
-    id: "DEP#002",
-    uid: "UID#33333",
-    userName: "Player_Echo",
-    amount: 50000,
-    method: "Easypaisa",
-    account: "3009876543",
-    dateRequested: "2026-06-29 10:10",
-    status: "approved",
-  },
-];
-
 export function FundsManagement({ type }: FundsManagementProps) {
-  const requests = type === "withdraw" ? MOCK_WITHDRAW_REQUESTS : MOCK_DEPOSIT_REQUESTS;
+  const [requests, setRequests] = useState<FundsRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<FundsRequest | null>(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   const title = type === "withdraw" ? "Withdrawal Requests" : "Deposit Requests";
   const description =
     type === "withdraw"
       ? "Approve or reject user withdrawal requests"
-      : "Manage and process deposit requests";
+      : "Review deposit activity and update transaction status";
 
-  const pendingCount = requests.filter((r) => r.status === "pending").length;
+  const pendingCount = useMemo(
+    () => requests.filter((r) => r.status === "pending").length,
+    [requests],
+  );
+
+  const fetchRequests = async () => {
+    setLoading(true);
+    setError("");
+    setSelectedRequest(null);
+
+    try {
+      if (type === "withdraw") {
+        const withdrawRequests = supabase.from("withdraw_requests") as any;
+        const { data, error } = await withdrawRequests
+          .select("id,user_id,amount,bank_name,account_name,account_number,status,created_at,reason")
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        if (error) throw error;
+
+        const userIds = Array.from(new Set((data || []).map((row: any) => row?.user_id).filter(Boolean)));
+        let bankData: any[] = [];
+
+        if (userIds.length > 0) {
+          const { data: banks, error: bankError } = await supabase
+            .from("user_banks")
+            .select("user_id,bank_name,account_name,account_number")
+            .in("user_id", userIds);
+
+          if (!bankError && banks) {
+            bankData = banks;
+          }
+        }
+
+        setRequests(
+          (data || []).map((row: any) => {
+            const bank = bankData.find((item) => item.user_id === row.user_id);
+            const method = row.bank_name || bank?.bank_name || "Bank Transfer";
+            const account = row.account_number || row.account_name || bank?.account_number || bank?.account_name || "-";
+
+            return {
+              id: row.id,
+              userId: row.user_id,
+              uid: row.user_id,
+              userName: row.user_id,
+              amount: Number(row.amount || 0),
+              method,
+              account,
+              dateRequested: row.created_at || "",
+              status: (row.status as RequestStatus) || "pending",
+              type: "withdraw",
+              bankName: row.bank_name ?? bank?.bank_name ?? null,
+              accountName: row.account_name ?? bank?.account_name ?? null,
+              accountNumber: row.account_number ?? bank?.account_number ?? null,
+              reason: row.reason ?? null,
+            } as any;
+          }),
+        );
+      } else {
+        const transactionsTable = supabase.from("transactions") as any;
+        const { data, error } = await transactionsTable
+          .select("id,user_id,amount,status,gateway_ref,created_at")
+          .eq("type", "deposit")
+          .order("created_at", { ascending: false })
+          .limit(100);
+
+        if (error) throw error;
+
+        setRequests(
+          (data || []).map((row) => ({
+            id: row.id,
+            userId: row.user_id,
+            uid: row.user_id,
+            userName: row.user_id,
+            amount: row.amount,
+            method: row.gateway_ref ? "Payment Gateway" : "Deposit",
+            account: row.gateway_ref || "Manual",
+            dateRequested: row.created_at,
+            status: (row.status as RequestStatus) || "pending",
+            type: "deposit",
+            gatewayRef: row.gateway_ref,
+          })),
+        );
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to load requests");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRequests();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type]);
+
+  const updateWithdrawRequest = async (requestId: string, status: "approved" | "rejected", reason?: string) => {
+    const withdrawRequests = supabase.from("withdraw_requests") as any;
+    const payload: any = { status };
+    if (reason) payload.reason = reason;
+    const { error } = await withdrawRequests
+      .update(payload)
+      .eq("id", requestId);
+
+    if (error) throw error;
+  };
+
+  const refundUserForWithdraw = async (request: FundsRequest) => {
+    const usersTable = supabase.from("users") as any;
+    const { data: userRow, error: userError } = await usersTable
+      .select("main_balance")
+      .eq("id", request.userId)
+      .maybeSingle();
+
+    if (userError) throw userError;
+
+    const currentBalance = Number(userRow?.main_balance || 0);
+    const newBalance = currentBalance + request.amount;
+
+    const usersUpdateTable = supabase.from("users") as any;
+    const { error: userUpdateError } = await usersUpdateTable
+      .update({ main_balance: newBalance })
+      .eq("id", request.userId);
+
+    if (userUpdateError) throw userUpdateError;
+
+    const walletsTable = supabase.from("wallets") as any;
+    const { data: walletRow, error: walletError } = await walletsTable
+      .select("main_balance")
+      .eq("user_id", request.userId)
+      .maybeSingle();
+
+    if (walletError) {
+      console.warn("Failed to read wallet row for refund:", walletError);
+      return;
+    }
+
+    if (walletRow) {
+      const walletBalance = Number(walletRow.main_balance || 0);
+      const walletsTable = supabase.from("wallets") as any;
+      const { error: walletUpdateError } = await walletsTable
+        .update({ main_balance: walletBalance + request.amount })
+        .eq("user_id", request.userId);
+
+      if (walletUpdateError) {
+        console.warn("Failed to refund wallet row:", walletUpdateError);
+      }
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!selectedRequest) return;
+    setLoading(true);
+    setError("");
+
+    try {
+      if (selectedRequest.type === "withdraw") {
+        await updateWithdrawRequest(selectedRequest.id, "approved");
+      } else {
+        const transactionsTable = supabase.from("transactions") as any;
+        const { error } = await transactionsTable
+          .update({ status: "completed" })
+          .eq("id", selectedRequest.id);
+
+        if (error) throw error;
+      }
+
+      await fetchRequests();
+      setSelectedRequest((prev) => prev && { ...prev, status: selectedRequest.type === "withdraw" ? "approved" : "completed" });
+    } catch (err: any) {
+      setError(err?.message || "Failed to update status");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!selectedRequest || selectedRequest.type !== "withdraw") return;
+    if (!rejectReason.trim()) {
+      setError("Please provide a rejection reason.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      await refundUserForWithdraw(selectedRequest);
+      await updateWithdrawRequest(selectedRequest.id, "rejected", rejectReason);
+
+      // Insert a failed transaction record so it appears in the user's transaction history with remarks
+      try {
+        const txId = `TX-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
+        const { error: txError } = await supabase.from("transactions").insert([{ id: txId, user_id: selectedRequest.userId, type: 'withdraw', amount: selectedRequest.amount, status: 'failed', gateway_ref: rejectReason }]);
+        if (txError) console.warn('Failed to insert transaction record for rejection', txError);
+      } catch (e) {
+        console.warn(e);
+      }
+      setShowRejectModal(false);
+      setRejectReason("");
+      await fetchRequests();
+      setSelectedRequest((prev) => prev && { ...prev, status: "rejected", reason: rejectReason });
+    } catch (err: any) {
+      setError(err?.message || "Failed to reject request");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="flex-1 overflow-auto">
@@ -103,7 +264,7 @@ export function FundsManagement({ type }: FundsManagementProps) {
             { label: "Pending", value: pendingCount, color: "from-[#fbbf24]" },
             {
               label: "Approved",
-              value: requests.filter((r) => r.status === "approved").length,
+              value: requests.filter((r) => r.status === "approved" || r.status === "completed").length,
               color: "from-[#4ade80]",
             },
             {
@@ -127,6 +288,12 @@ export function FundsManagement({ type }: FundsManagementProps) {
           ))}
         </div>
 
+        {error && (
+          <div className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+            {error}
+          </div>
+        )}
+
         {/* Main Content */}
         <div className="grid grid-cols-3 gap-8">
           {/* Requests List */}
@@ -145,46 +312,60 @@ export function FundsManagement({ type }: FundsManagementProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {requests.map((request) => (
-                      <tr
-                        key={request.id}
-                        onClick={() => setSelectedRequest(request)}
-                        className={`border-b border-[#0f3460] cursor-pointer transition-all ${
-                          selectedRequest?.id === request.id
-                            ? "bg-[#0f3460] border-l-4 border-[#e94560]"
-                            : "hover:bg-[#0f3460]"
-                        }`}
-                      >
-                        <td className="text-white font-bold py-4 px-6">{request.id}</td>
-                        <td className="py-4 px-6">
-                          <div>
-                            <p className="text-white font-medium">{request.userName}</p>
-                            <p className="text-gray-400 text-xs">{request.uid}</p>
-                          </div>
-                        </td>
-                        <td className="text-[#fbbf24] font-bold py-4 px-6">
-                          Rs {request.amount.toLocaleString()}
-                        </td>
-                        <td className="text-gray-300 py-4 px-6">{request.method}</td>
-                        <td className="text-gray-400 text-xs py-4 px-6">{request.dateRequested}</td>
-                        <td className="py-4 px-6">
-                          <span
-                            className={`px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 ${
-                              request.status === "pending"
-                                ? "bg-[#fbbf24]/20 text-[#fbbf24]"
-                                : request.status === "approved"
-                                  ? "bg-[#4ade80]/20 text-[#4ade80]"
-                                  : "bg-[#ef4444]/20 text-[#ef4444]"
-                            }`}
-                          >
-                            {request.status === "pending" && <Clock className="w-3 h-3" />}
-                            {request.status === "approved" && <Check className="w-3 h-3" />}
-                            {request.status === "rejected" && <X className="w-3 h-3" />}
-                            {request.status}
-                          </span>
+                    {loading ? (
+                      <tr>
+                        <td colSpan={6} className="text-center py-8 text-gray-400">
+                          Loading requests...
                         </td>
                       </tr>
-                    ))}
+                    ) : requests.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="text-center py-8 text-gray-400">
+                          No requests found.
+                        </td>
+                      </tr>
+                    ) : (
+                      requests.map((request) => (
+                        <tr
+                          key={request.id}
+                          onClick={() => setSelectedRequest(request)}
+                          className={`border-b border-[#0f3460] cursor-pointer transition-all ${
+                            selectedRequest?.id === request.id
+                              ? "bg-[#0f3460] border-l-4 border-[#e94560]"
+                              : "hover:bg-[#0f3460]"
+                          }`}
+                        >
+                          <td className="text-white font-bold py-4 px-6">{request.id}</td>
+                          <td className="py-4 px-6">
+                            <div>
+                              <p className="text-white font-medium">{request.userName}</p>
+                              <p className="text-gray-400 text-xs">{request.uid}</p>
+                            </div>
+                          </td>
+                          <td className="text-[#fbbf24] font-bold py-4 px-6">
+                            Rs {request.amount.toLocaleString()}
+                          </td>
+                          <td className="text-gray-300 py-4 px-6">{request.method}</td>
+                          <td className="text-gray-400 text-xs py-4 px-6">{request.dateRequested}</td>
+                          <td className="py-4 px-6">
+                            <span
+                              className={`px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 ${
+                                request.status === "pending"
+                                  ? "bg-[#fbbf24]/20 text-[#fbbf24]"
+                                  : request.status === "approved" || request.status === "completed"
+                                    ? "bg-[#4ade80]/20 text-[#4ade80]"
+                                    : "bg-[#ef4444]/20 text-[#ef4444]"
+                              }`}
+                            >
+                              {request.status === "pending" && <Clock className="w-3 h-3" />}
+                              {(request.status === "approved" || request.status === "completed") && <Check className="w-3 h-3" />}
+                              {request.status === "rejected" && <X className="w-3 h-3" />}
+                              {request.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -224,6 +405,12 @@ export function FundsManagement({ type }: FundsManagementProps) {
                   <p className="text-gray-400 text-sm">Requested On</p>
                   <p className="text-white">{selectedRequest.dateRequested}</p>
                 </div>
+                {selectedRequest.type === "deposit" && selectedRequest.gatewayRef && (
+                  <div>
+                    <p className="text-gray-400 text-sm">Gateway Reference</p>
+                    <p className="text-white font-mono text-sm">{selectedRequest.gatewayRef}</p>
+                  </div>
+                )}
               </div>
 
               {selectedRequest.status === "rejected" && selectedRequest.reason && (
@@ -235,15 +422,21 @@ export function FundsManagement({ type }: FundsManagementProps) {
 
               {selectedRequest.status === "pending" && (
                 <div className="space-y-3">
-                  <button className="w-full py-2 px-4 bg-gradient-to-r from-[#4ade80] to-[#22c55e] text-white rounded-lg hover:shadow-lg hover:shadow-green-500/30 transition-all font-medium">
-                    ✓ Approve Request
-                  </button>
                   <button
-                    onClick={() => setShowRejectModal(true)}
-                    className="w-full py-2 px-4 bg-[#ef4444]/20 text-[#ef4444] rounded-lg border border-[#ef4444]/50 hover:bg-[#ef4444]/30 transition-all font-medium"
+                    onClick={handleApprove}
+                    disabled={loading}
+                    className="w-full py-2 px-4 bg-gradient-to-r from-[#4ade80] to-[#22c55e] text-white rounded-lg hover:shadow-lg hover:shadow-green-500/30 transition-all font-medium disabled:opacity-50"
                   >
-                    ✗ Reject Request
+                    ✓ {selectedRequest.type === "withdraw" ? "Approve Request" : "Mark Completed"}
                   </button>
+                  {selectedRequest.type === "withdraw" && (
+                    <button
+                      onClick={() => setShowRejectModal(true)}
+                      className="w-full py-2 px-4 bg-[#ef4444]/20 text-[#ef4444] rounded-lg border border-[#ef4444]/50 hover:bg-[#ef4444]/30 transition-all font-medium"
+                    >
+                      ✗ Reject Request
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -253,7 +446,7 @@ export function FundsManagement({ type }: FundsManagementProps) {
         {/* Reject Modal */}
         {showRejectModal && selectedRequest && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] max-w-md w-full mx-4">
+            <div className="w-full max-w-md md:max-w-lg mx-auto rounded-2xl border border-[#0f3460] bg-gradient-to-br from-[#1a1a2e] to-[#16213e] p-6">
               <h3 className="text-white font-bold text-lg mb-4">Reject Request</h3>
               <p className="text-gray-400 text-sm mb-4">
                 Request ID: <span className="text-white">{selectedRequest.id}</span>
@@ -276,7 +469,11 @@ export function FundsManagement({ type }: FundsManagementProps) {
                 >
                   Cancel
                 </button>
-                <button className="flex-1 py-2 px-4 bg-[#ef4444] text-white rounded-lg hover:bg-[#dc2626] transition-all font-medium">
+                <button
+                  onClick={handleReject}
+                  disabled={loading}
+                  className="flex-1 py-2 px-4 bg-[#ef4444] text-white rounded-lg hover:bg-[#dc2626] transition-all font-medium disabled:opacity-50"
+                >
                   Confirm Reject
                 </button>
               </div>

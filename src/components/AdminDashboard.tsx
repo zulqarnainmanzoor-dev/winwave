@@ -111,7 +111,7 @@ export default function AdminDashboard() {
       setMemberLoadError(null);
       try {
         const { data, error } = await supabase
-          .from('profiles')
+          .from('users')
           .select('id, phone_number, referral_code')
           .order('created_at', { ascending: false })
           .limit(100);

@@ -26,15 +26,15 @@ const normalizePhone = (phone: string) => (phone || '').replace(/\D/g, '');
 // NOTE: This is a minimal guard for phone uniqueness.
 // It logs registration attempts but does not block repeated device/IP attempts.
 const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuardResult> => {
-  // 1) Hard phone uniqueness using the profiles table, which is the app's user record source.
-  const { data: existingProfiles, error: existingProfilesErr } = await supabase
-    .from('profiles')
+  // 1) Hard phone uniqueness using the public.users table (target table per requirements)
+  const { data: existingUsers, error: existingUsersErr } = await supabase
+    .from('users')
     .select('id')
     .eq('phone_number', phone)
     .limit(1);
 
-  if (existingProfilesErr) throw existingProfilesErr;
-  if (existingProfiles && existingProfiles.length > 0) {
+  if (existingUsersErr) throw existingUsersErr;
+  if (existingUsers && existingUsers.length > 0) {
     return { ok: false, reason: 'phone_already_registered' };
   }
 
@@ -61,20 +61,64 @@ const isValidInvitationCodeFormat = (raw: string) => {
   return digitsOk || wwOk;
 };
 
+/**
+ * Generate a unique 6-digit numeric referral code (e.g., 101814)
+ * Ensures no collision with existing codes in public.users
+ */
+const generateReferralCode = async (): Promise<string> => {
+  let code: string;
+  let attempts = 0;
+  do {
+    // Generate random 6-digit number between 100000 and 999999
+    code = (100000 + Math.floor(Math.random() * 900000)).toString();
+    attempts++;
+    
+    // Check if code already exists in public.users
+    const { data, error } = await supabase
+      .from('users')
+      .select('id')
+      .eq('referral_code', code)
+      .limit(1);
+      
+    if (error) {
+      console.error('Error checking referral code uniqueness:', error);
+      // If error, just use this code anyway
+      return code;
+    }
+    
+    if (!data || data.length === 0) {
+      // Code is unique
+      return code;
+    }
+    
+    // If we've tried too many times, just use the current code
+    if (attempts > 20) {
+      console.warn('Could not find unique referral code after 20 attempts, using:', code);
+      return code;
+    }
+  } while (true);
+};
+
 router.post('/register', async (req, res) => {
   try {
     const body = req.body as RegisterBody;
-    const phone = normalizePhone(body?.phone);
+    const rawPhone = normalizePhone(body?.phone);
     const password = body?.password || '';
     const invitationCode = (body?.invitationCode || '').trim();
 
-    if (!phone || phone.length < 9) return res.status(400).json({ ok: false, error: 'Invalid phone' });
+    if (!rawPhone) return res.status(400).json({ ok: false, error: 'Invalid phone' });
+    const normalizedPhone = rawPhone.length === 11 && rawPhone.startsWith('0') ? rawPhone.slice(1) : rawPhone;
+    if (!/^03\d{9}$/.test(`0${normalizedPhone}`)) {
+      return res.status(400).json({ ok: false, error: 'Invalid Pakistan mobile number. Use 03XXXXXXXXX format.' });
+    }
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'Invalid password' });
 
-    const cleanPhone = phone.trim();
-    const dummyEmail = `u_${cleanPhone}@winwave.com`;
+    const cleanPhone = normalizedPhone.trim();
+    const userEmail = `${cleanPhone}@winwave.com`;
 
-    // Referrer ID lookup logic
+    // ============================================================
+    // REFERRAL LOGIC: Look up referrer by referral_code in public.users
+    // ============================================================
     let referrerId: string | null = null;
 
     if (invitationCode) {
@@ -89,43 +133,83 @@ router.post('/register', async (req, res) => {
       let referrer: any = null;
       let refErr: any = null;
 
+      console.log('🔍 REFERRAL DEBUG - Looking up invitation code:', normalizedInvitationCode);
+
       if (referralMatch) {
+        // Try matching as WWxxxxxx format in public.users
         ({ data: referrer, error: refErr } = await supabase
-          .from('profiles')
-          .select('id')
+          .from('users')
+          .select('id, referral_code')
           .eq('referral_code', normalizedInvitationCode)
           .maybeSingle());
+          
+        console.log('🔍 REFERRAL DEBUG - WW format lookup result:', { referrer, refErr });
       } else if (numericMatch) {
+        // Numeric code - look up directly in public.users
         const baseCode = normalizedInvitationCode.slice(0, 6);
-        const orFilters = [`referral_code.eq.${baseCode}`, `referral_code.eq.WW${baseCode}`, `phone_number.eq.${normalizedInvitationCode}`].join(',');
+        console.log('🔍 REFERRAL DEBUG - Numeric code detected, looking up referral_code:', baseCode);
+        
+        // First try exact match
         ({ data: referrer, error: refErr } = await supabase
-          .from('profiles')
-          .select('id')
-          .or(orFilters)
+          .from('users')
+          .select('id, referral_code')
+          .eq('referral_code', baseCode)
           .maybeSingle());
+          
+        console.log('🔍 REFERRAL DEBUG - Numeric exact lookup result:', { referrer, refErr });
+        
+        // If not found, try with WW prefix
+        if (!referrer && !refErr) {
+          console.log('🔍 REFERRAL DEBUG - Trying WW prefix lookup for:', `WW${baseCode}`);
+          ({ data: referrer, error: refErr } = await supabase
+            .from('users')
+            .select('id, referral_code')
+            .eq('referral_code', `WW${baseCode}`)
+            .maybeSingle());
+            
+          console.log('🔍 REFERRAL DEBUG - WW prefix lookup result:', { referrer, refErr });
+        }
+
+        // If still not found, try phone_number
+        if (!referrer && !refErr) {
+          console.log('🔍 REFERRAL DEBUG - Trying phone_number lookup for:', normalizedInvitationCode);
+          ({ data: referrer, error: refErr } = await supabase
+            .from('users')
+            .select('id, referral_code')
+            .eq('phone_number', normalizedInvitationCode)
+            .maybeSingle());
+            
+          console.log('🔍 REFERRAL DEBUG - Phone number lookup result:', { referrer, refErr });
+        }
       } else {
+        // Fallback: exact match on referral_code
         ({ data: referrer, error: refErr } = await supabase
-          .from('profiles')
-          .select('id')
+          .from('users')
+          .select('id, referral_code')
           .eq('referral_code', normalizedInvitationCode)
           .maybeSingle());
+          
+        console.log('🔍 REFERRAL DEBUG - Fallback lookup result:', { referrer, refErr });
       }
 
       if (refErr) {
-        console.warn('Invitation code validation query failed, continuing without referral:', {
+        console.warn('⚠️ REFERRAL DEBUG - Invitation code validation query failed:', {
           invitationCode,
           normalizedInvitationCode,
           error: refErr,
         });
       } else if (referrer?.id) {
         referrerId = referrer.id;
+        console.log('✅ REFERRAL DEBUG - Referrer found! ID:', referrerId, 'Code:', referrer.referral_code);
       } else {
-        console.warn('Invitation code not found, continuing registration without referral:', invitationCode);
+        console.warn('⚠️ REFERRAL DEBUG - Invitation code not found in public.users, continuing without referral:', invitationCode);
       }
+    } else {
+      console.log('ℹ️ REFERRAL DEBUG - No invitation code provided, registering without referral');
     }
 
     const context = getDeviceContext(req, body);
-    const guard = await enforceAbuseGuards(context.ip, phone);
+    const guard = await enforceAbuseGuards(context.ip, normalizedPhone);
     if (!guard.ok && isAbuseGuardFailure(guard)) {
        return res.status(409).json({ ok: false, error: 'Phone already registered' });
     }
@@ -137,13 +221,13 @@ router.post('/register', async (req, res) => {
 
     if (serviceRoleAvailable) {
       ({ data: authData, error: authError } = await supabase.auth.admin.createUser({
-        email: dummyEmail,
+        email: userEmail,
         password,
         user_metadata: { phone: cleanPhone }
       } as any));
     } else {
       ({ data: authData, error: authError } = await supabase.auth.signUp({
-        email: dummyEmail,
+        email: userEmail,
         password,
         options: { data: { phone: cleanPhone } }
       }));
@@ -154,35 +238,49 @@ router.post('/register', async (req, res) => {
     const userId = authData?.user?.id || (authData as any)?.id;
     if (!userId) return res.status(500).json({ ok: false, error: 'Signup failed: No User ID' });
 
-    // 2. Manual Profile & Wallet Insert
-    const referral_code = `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    // 2. Generate unique 6-digit numeric referral code
+    const referral_code = await generateReferralCode();
+    console.log('📋 Generated 6-digit referral code for new user:', referral_code);
 
-    const { error: profileError } = await supabase.from('profiles').insert({
+    // 3. Insert into public.users table (target table per requirements)
+    const { error: userInsertError } = await supabase.from('users').insert({
       id: userId,
       phone_number: cleanPhone,
-      vip_level: 0,
-      display_id: Math.floor(100000 + Math.random() * 900000).toString(),
       referral_code: referral_code,
-      referred_by: referrerId
+      referred_by: referrerId,  // This maps the referrer's id from public.users
+      created_at: new Date().toISOString(),
     });
 
+    if (userInsertError) {
+      console.error("❌ User Insert Error:", userInsertError);
+      return res.status(500).json({ ok: false, error: 'User record creation failed' });
+    }
+
+    // 4. Create wallet record
     const { error: walletError } = await supabase.from('wallets').insert({
       user_id: userId,
       main_balance: 0,
       wagering_required: 0,
     });
 
-    if (profileError || walletError) {
-      console.error("DB Insert Error:", { profileError, walletError });
-      return res.status(500).json({ ok: false, error: 'Database record creation failed' });
+    if (walletError) {
+      console.error("❌ Wallet Insert Error:", walletError);
+      return res.status(500).json({ ok: false, error: 'Wallet creation failed' });
     }
 
-    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: referral_code });
+    // Log successful registration
+    console.log('✅ Registration complete for:', cleanPhone, 'with referral_code:', referral_code, 'referred_by:', referrerId);
+    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: referral_code, referredBy: referrerId });
 
-    return res.json({ ok: true });
+    return res.json({ 
+      ok: true, 
+      userId,
+      referral_code,
+      referred_by: referrerId 
+    });
 
   } catch (err: any) {
-    console.error('register failed', err);
+    console.error('❌ register failed', err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });

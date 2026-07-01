@@ -1,6 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 
+// Demo mode configuration
+const DEMO_PHONE_NUMBER = '923001234567'; // Configure this as needed
+
 interface UserContextType {
   username: string;
   setUsername: (username: string) => void;
@@ -50,14 +53,13 @@ interface UserContextType {
     wallet?: { main_balance?: number; wagering_required?: number }
   ) => void;
   logout: () => void;
-  selectedPaymentMethod: 'jazzcash' | 'easypaisa' | 'usdt';
-  setSelectedPaymentMethod: (method: 'jazzcash' | 'easypaisa' | 'usdt') => void;
+  selectedPaymentMethod: 'jazzcash' | 'easypaisa';
+  setSelectedPaymentMethod: (method: 'jazzcash' | 'easypaisa') => void;
   withdrawalPassword: string;
   setWithdrawalPassword: (pin: string) => void;
   boundAccounts: {
     easypaisa: { name: string; account: string; remarks?: string } | null;
     jazzcash: { name: string; account: string; remarks?: string } | null;
-    usdt: { name: string; account: string; network: string; remarks?: string } | null;
   };
   setBoundAccounts: (accounts: any) => void;
 }
@@ -88,7 +90,6 @@ export const VIP_TIERS: VipTier[] = [
 export const PAYMENT_LIMITS = {
   easypaisa: { min: 500, max: 50_000, dailyMax: 3 },
   jazzcash: { min: 500, max: 50_000, dailyMax: 3 },
-  usdt: { min: 3_000, max: 100_000_000, dailyMax: 5 },
 } as const;
 
 export type PaymentMethod = keyof typeof PAYMENT_LIMITS;
@@ -100,7 +101,6 @@ export function formatDisplayUid(uid: string): string {
 
 export type ProfileRow = {
   vip_level?: number | null;
-  progress?: number | null;
   wagered_amount?: number | null;
 };
 
@@ -176,23 +176,20 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [wageringCompleted, setWageringCompleted] = useState(savedSession?.wageringCompleted ?? 0);
   const [referralCode, setReferralCode] = useState(savedSession?.referralCode || '');
   const [referralCount, setReferralCount] = useState(savedSession?.referralCount ?? 0);
-  const [totalCommissions, setTotalCommissionsState] = useState(savedSession?.totalCommissions ?? 0);
+  const [totalCommissions, setTotalCommissions] = useState(savedSession?.totalCommissions ?? 0);
   const [claimedDailyBonus, setClaimedDailyBonus] = useState(savedSession?.claimedDailyBonus ?? false);
   const [dailyWagerProgress, setDailyWagerProgress] = useState(savedSession?.dailyWagerProgress ?? 0);
 
-  const setTotalCommissions = (amount: number) => {
-    setTotalCommissionsState(amount);
-  };
+  // using setter from useState directly: setTotalCommissions
   const [lastLogin, setLastLogin] = useState(savedSession?.lastLogin || '');
   const [phoneNumber, setPhoneNumberState] = useState(savedSession?.phoneNumber || '');
-  const [selectedPaymentMethod, setSelectedPaymentMethodState] = useState<'jazzcash' | 'easypaisa' | 'usdt'>(
-    (savedSession?.selectedPaymentMethod as 'jazzcash' | 'easypaisa' | 'usdt') || 'jazzcash'
+  const [selectedPaymentMethod, setSelectedPaymentMethodState] = useState<'jazzcash' | 'easypaisa'>(
+    (savedSession?.selectedPaymentMethod as 'jazzcash' | 'easypaisa') || 'jazzcash'
   );
   const [withdrawalPassword, setWithdrawalPasswordState] = useState(savedSession?.withdrawalPassword || '');
   const [boundAccounts, setBoundAccountsState] = useState(savedSession?.boundAccounts || {
     easypaisa: null,
     jazzcash: null,
-    usdt: null,
   });
 
 
@@ -213,7 +210,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const setSelectedPaymentMethod = (method: 'jazzcash' | 'easypaisa' | 'usdt') => {
+  const setSelectedPaymentMethod = (method: 'jazzcash' | 'easypaisa') => {
     setSelectedPaymentMethodState(method);
   };
 
@@ -265,6 +262,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     return true;
   }, [mainWalletBalance, thirdPartyWalletBalance]);
 
+  // Apply demo mode: if phone number matches DEMO_PHONE_NUMBER, force balance to 1,000,000
+  const applyDemoMode = useCallback((phone: string) => {
+    if (phone === DEMO_PHONE_NUMBER) {
+      console.log('🎮 DEMO MODE ACTIVE - Setting balance to 1,000,000 for demo user:', phone);
+      setMainWalletBalanceState(1000000);
+    }
+  }, []);
+
   const login = async (
     phoneNumberValue: string,
     userId?: string,
@@ -287,12 +292,15 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setLastLogin(new Date().toISOString());
     setIsLoggedIn(true);
 
-    // Fetch and apply profile data (VIP status, progress, account level)
+    // Apply demo mode if applicable
+    applyDemoMode(profile?.phone_number || phoneNumberValue);
+
+    // Fetch and apply profile data (VIP status, wagered amount)
     if (userId) {
       try {
         const { data, error } = await supabase
-          .from('profiles')
-          .select('vip_level, progress, wagered_amount')
+          .from('users')
+          .select('vip_level, wagered_amount')
           .eq('id', userId)
           .maybeSingle();
 
@@ -341,11 +349,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem("cumulative_wager", wagered.toString());
     }
 
-    if (profile.progress != null) {
-      setVipProgressState(Math.min(100, Math.max(0, profile.progress)));
-      return;
-    }
-
+    // progress column doesn't exist in users table - compute from wagered_amount
     if (wagered != null && level != null) {
       setVipProgressState(computeVipProgress(level, wagered));
       return;
@@ -377,8 +381,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     if (!userId) return;
 
     const { data, error } = await supabase
-      .from('profiles')
-      .select('vip_level, progress, wagered_amount')
+      .from('users')
+      .select('vip_level, wagered_amount')
       .eq('id', userId)
       .maybeSingle();
 
@@ -402,33 +406,79 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       setMainWalletBalanceState(walletData.main_balance || 0);
     }
 
-    // Calculate yesterday's commission from betting history
+    // Calculate yesterday's commission from betting_history table
     try {
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-      yesterday.setHours(0, 0, 0, 0);
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      // Fetch bets from yesterday
-      const { data: betsData, error: betsError } = await supabase
-        .from('bets')
-        .select('amount, created_at')
-        .eq('user_id', userId)
-        .gte('created_at', yesterday.toISOString())
-        .lt('created_at', today.toISOString());
-
-      if (!betsError && betsData) {
-        // Calculate commission (e.g., 1% of total bets)
-        const totalBets = betsData.reduce((sum, bet) => sum + (bet.amount || 0), 0);
-        const commission = totalBets * 0.01; // 1% commission rate
-        setTotalCommissions(commission);
+      const { fetchYesterdayCommission } = await import('../lib/database');
+      const { total, error: commissionError } = await fetchYesterdayCommission(userId);
+      if (!commissionError) {
+        setTotalCommissions(total);
       }
     } catch (err) {
       console.error('Error calculating yesterday\'s commission:', err);
     }
   }, [uid, applyProfileData]);
+
+  // Persist withdrawal_pin to public.users whenever it changes
+  useEffect(() => {
+    if (!withdrawalPassword || !uid) return;
+    
+    const persistWithdrawalPin = async () => {
+      try {
+        const { error } = await supabase
+          .from('users')
+          .update({ withdrawal_pin: withdrawalPassword })
+          .eq('id', uid);
+          
+        if (error) {
+          console.error('Failed to persist withdrawal_pin:', error);
+        } else {
+          console.log('✅ Withdrawal PIN persisted to public.users');
+        }
+      } catch (err) {
+        console.error('Error persisting withdrawal_pin:', err);
+      }
+    };
+    
+    persistWithdrawalPin();
+  }, [withdrawalPassword, uid]);
+
+  // Persist bank details to public.users whenever boundAccounts changes
+  useEffect(() => {
+    if (!uid) return;
+    if (!boundAccounts.easypaisa && !boundAccounts.jazzcash) return;
+    
+    const persistBankDetails = async () => {
+      try {
+        const bankDetails = {
+          easypaisa: boundAccounts.easypaisa ? {
+            name: boundAccounts.easypaisa.name,
+            account: boundAccounts.easypaisa.account,
+            remarks: boundAccounts.easypaisa.remarks || null,
+          } : null,
+          jazzcash: boundAccounts.jazzcash ? {
+            name: boundAccounts.jazzcash.name,
+            account: boundAccounts.jazzcash.account,
+            remarks: boundAccounts.jazzcash.remarks || null,
+          } : null,
+        };
+        
+        const { error } = await supabase
+          .from('users')
+          .update({ bank_details: bankDetails })
+          .eq('id', uid);
+          
+        if (error) {
+          console.error('Failed to persist bank details:', error);
+        } else {
+          console.log('✅ Bank details persisted to public.users');
+        }
+      } catch (err) {
+        console.error('Error persisting bank details:', err);
+      }
+    };
+    
+    persistBankDetails();
+  }, [boundAccounts, uid]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -450,7 +500,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       wageringRequired,
       wageringCompleted,
       referralCount,
-      totalCommissions: totalCommissionsState,
+      totalCommissions,
       claimedDailyBonus,
       dailyWagerProgress,
       cumulativeWager,
@@ -464,7 +514,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     };
 
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(session));
-  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissionsState, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
+  }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
 
   useEffect(() => {
     if (!isLoggedIn || !uid) return;
@@ -478,7 +528,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         {
           event: 'UPDATE',
           schema: 'public',
-          table: 'profiles',
+          table: 'users',
           filter: `id=eq.${uid}`,
         },
         (payload) => {
@@ -543,7 +593,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       addDepositWithBonus,
       referralCode,
       referralCount,
-      totalCommissions: totalCommissionsState,
+      totalCommissions,
       setTotalCommissions,
       claimedDailyBonus,
       setClaimedDailyBonus,

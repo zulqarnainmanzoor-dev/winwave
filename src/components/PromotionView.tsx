@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { supabase } from "../lib/supabaseClient";
 import {
   Users,
   Copy,
@@ -27,6 +28,7 @@ import AnimatedCounter from "./AnimatedCounter";
 export default function PromotionView() {
   const { t } = useLanguage();
   const {
+    uid,
     referralCode,
     referralCount,
     totalCommissions,
@@ -44,6 +46,8 @@ export default function PromotionView() {
   const [showNewInvitees, setShowNewInvitees] = useState(false);
   const [showCommissionDetails, setShowCommissionDetails] = useState(false);
   const [showInvitationRules, setShowInvitationRules] = useState(false);
+  const [claimingCommission, setClaimingCommission] = useState(false);
+  const [claimMessage, setClaimMessage] = useState<string | null>(null);
 
   // Gift Code states
   const [giftCode, setGiftCode] = useState("");
@@ -78,13 +82,54 @@ export default function PromotionView() {
 
   const handleInviteFriends = async () => {
     try {
-      const inviteLink = `${window.location.origin}/?ref=${referralCode}`;
+      const inviteLink = `${window.location.origin}/#/register?ref=${referralCode}`;
       await navigator.clipboard.writeText(inviteLink);
       setCopiedInvite(true);
       setTimeout(() => setCopiedInvite(false), 2000);
     } catch (err) {
       console.error('Failed to copy invite link:', err);
       alert('Failed to copy link. Please try again.');
+    }
+  };
+
+  const handleClaimCommission = async () => {
+    if (!uid || !Number(totalCommissions)) {
+      setClaimMessage('No commission available to claim.');
+      return;
+    }
+
+    setClaimingCommission(true);
+    setClaimMessage(null);
+
+    try {
+      const { data: walletRow, error: walletError } = await supabase
+        .from('wallets')
+        .select('main_balance')
+        .eq('user_id', uid)
+        .maybeSingle();
+
+      if (walletError) throw walletError;
+
+      const currentBalance = Number(walletRow?.main_balance || 0);
+      const commissionAmount = Number(totalCommissions || 0);
+      const nextBalance = currentBalance + commissionAmount;
+
+      const { error: updateError } = await supabase
+        .from('wallets')
+        .update({ main_balance: nextBalance })
+        .eq('user_id', uid);
+
+      if (updateError) throw updateError;
+
+      setBalance(balance + commissionAmount);
+      setTotalCommissions(0);
+      setClaimMessage(`Claimed Rs ${commissionAmount.toLocaleString()} to your main wallet.`);
+    } catch (err: any) {
+      console.error('Claim commission failed', err);
+      setClaimMessage(err?.message || 'Unable to claim commission right now.');
+    } finally {
+      setClaimingCommission(false);
+      setTimeout(() => setClaimMessage(null), 4000);
     }
   };
 
@@ -307,25 +352,39 @@ export default function PromotionView() {
           {copiedInvite ? "Invite Link Copied!" : "Invite Friends To Get Money"}
         </button>
 
+        <button
+          onClick={handleClaimCommission}
+          disabled={claimingCommission || !uid || !Number(totalCommissions)}
+          className="w-full py-3.5 bg-[#1f2937] border border-orange-500/30 hover:border-orange-400 transition-all rounded-full font-black text-sm tracking-widest text-orange-400 flex items-center justify-center gap-2 uppercase disabled:opacity-60"
+        >
+          {claimingCommission ? "Claiming..." : "Claim Commission to Main Wallet"}
+        </button>
+
+        {claimMessage && (
+          <div className="rounded-2xl border border-orange-500/20 bg-orange-500/10 px-4 py-3 text-sm text-orange-300">
+            {claimMessage}
+          </div>
+        )}
+
         {/* Menu list items mimicking the actual dashboard */}
         <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden divide-y divide-white/5 shadow-[0_8px_16px_rgba(0,0,0,0.4)]">
           {/* Item 1: Invite Code display with Copy */}
-          <div className="p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
+          <div className="p-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
               <div className="w-9 h-9 bg-orange-500/10 rounded-xl flex items-center justify-center">
                 <Users className="w-5 h-5 text-[#ffa502]" />
               </div>
-              <span className="text-sm font-bold text-white">Invite Code</span>
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-white">Invite Code</div>
+                <div className="text-sm font-black text-orange-300 font-mono select-all break-all">{referralCode || 'No invite code yet'}</div>
+              </div>
             </div>
-            <div className="flex items-center gap-2.5">
-              <span className="text-sm font-black text-gray-400 font-mono select-all">{referralCode}</span>
-              <button 
-                onClick={handleCopyCode}
-                className="p-1.5 hover:bg-white/5 active:scale-95 transition-all rounded-lg text-gray-400 hover:text-[#ffa502] cursor-pointer"
-              >
-                {copiedCode ? <Check className="w-4 h-4 text-[#ffa502]" /> : <Copy className="w-4 h-4" />}
-              </button>
-            </div>
+            <button 
+              onClick={handleCopyCode}
+              className="shrink-0 p-2 hover:bg-white/5 active:scale-95 transition-all rounded-lg text-gray-400 hover:text-[#ffa502] cursor-pointer"
+            >
+              {copiedCode ? <Check className="w-4 h-4 text-[#ffa502]" /> : <Copy className="w-4 h-4" />}
+            </button>
           </div>
 
           {/* Item 2: Commission Details */}

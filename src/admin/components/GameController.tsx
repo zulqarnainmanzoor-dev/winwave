@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useAdmin } from "../context/AdminContext";
 import { AlertCircle, Save, RotateCcw } from "lucide-react";
+import { supabase } from "../../lib/supabaseClient";
 
 interface GameControllerProps {
   gameType: "wingo" | "k3" | "trx" | "5d";
@@ -11,6 +12,9 @@ export function GameController({ gameType }: GameControllerProps) {
   const settings = gameSettings[gameType];
   const [selectedMode, setSelectedMode] = useState<"30s" | "1m" | "3m" | "5m">("30s");
   const [changesSaved, setChangesSaved] = useState(false);
+  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [overrideMessage, setOverrideMessage] = useState<string | null>(null);
+  const [overrideError, setOverrideError] = useState<string | null>(null);
 
   const currentModeSettings = settings.modes[selectedMode];
 
@@ -27,6 +31,58 @@ export function GameController({ gameType }: GameControllerProps) {
   const handleSave = () => {
     setChangesSaved(true);
     setTimeout(() => setChangesSaved(false), 2000);
+  };
+
+  const handleForceOutcome = async (outcome: "BIG" | "SMALL") => {
+    setOverrideError(null);
+    setOverrideLoading(true);
+
+    try {
+      const tableCandidates = ["game_records", "game_rounds"] as const;
+      let activeRound: { id: string; tableName: string } | null = null;
+
+      for (const tableName of tableCandidates) {
+        const { data, error } = await supabase
+          .from(tableName)
+          .select("id")
+          .eq("game_type", gameType)
+          .eq("status", "active")
+          .order("started_at", { ascending: false })
+          .limit(1);
+
+        if (!error && data?.[0]?.id) {
+          activeRound = { id: data[0].id, tableName };
+          break;
+        }
+      }
+
+      if (!activeRound) {
+        throw new Error("No active round available for this game.");
+      }
+
+      const updatePayloads = [
+        { forced_outcome: outcome, manual_result: outcome },
+        { manual_result: outcome },
+        { forced_outcome: outcome },
+      ] as const;
+
+      let lastError: unknown = null;
+      for (const payload of updatePayloads) {
+        const { error } = await supabase.from(activeRound.tableName).update(payload).eq("id", activeRound.id);
+        if (!error) {
+          setOverrideMessage(`Forced ${outcome} win for active ${gameType.toUpperCase()} round.`);
+          return;
+        }
+        lastError = error;
+      }
+
+      throw lastError || new Error("Unable to force outcome.");
+    } catch (error: any) {
+      setOverrideError(error?.message || "Unable to force outcome.");
+    } finally {
+      setOverrideLoading(false);
+      setTimeout(() => setOverrideMessage(null), 5000);
+    }
   };
 
   const modes = ["30s", "1m", "3m", "5m"] as const;
@@ -196,24 +252,68 @@ export function GameController({ gameType }: GameControllerProps) {
           </span>
         </div>
 
-        <div className="flex items-center gap-3">
-          {changesSaved && (
-            <span className="text-[#4ade80] text-sm font-medium flex items-center gap-1">
-              ✓ Changes saved
-            </span>
-          )}
+        <div className="flex flex-col gap-4 pt-6 border-t border-[#1a5f7a]">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <button
-            onClick={handleSave}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#e94560] to-[#ff6b6b] text-white rounded-lg hover:shadow-lg hover:shadow-red-500/30 transition-all duration-200 font-medium"
+            onClick={() => handleForceOutcome("BIG")}
+            disabled={overrideLoading}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-[#3b82f6] to-[#60a5fa] text-white rounded-lg hover:shadow-lg hover:shadow-blue-500/30 transition-all duration-200 font-medium disabled:opacity-70 disabled:cursor-not-allowed"
           >
-            <Save className="w-4 h-4" />
-            Save Changes
+            Force BIG Win
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 bg-[#0f3460] text-gray-300 hover:bg-[#1a3a52] rounded-lg transition-all duration-200 border border-[#1a5f7a] font-medium">
-            <RotateCcw className="w-4 h-4" />
-            Reset
+          <button
+            onClick={() => handleForceOutcome("SMALL")}
+            disabled={overrideLoading}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-[#22c55e] to-[#4ade80] text-white rounded-lg hover:shadow-lg hover:shadow-emerald-500/30 transition-all duration-200 font-medium disabled:opacity-70 disabled:cursor-not-allowed"
+          >
+            Force SMALL Win
           </button>
         </div>
+
+        {overrideLoading && (
+          <div className="text-sm text-gray-300">Applying forced outcome...</div>
+        )}
+        {overrideMessage && (
+          <div className="text-sm text-emerald-300">{overrideMessage}</div>
+        )}
+        {overrideError && (
+          <div className="text-sm text-rose-300">{overrideError}</div>
+        )}
+
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div
+              className={`w-3 h-3 rounded-full ${
+                currentModeSettings.enabled ? "bg-[#4ade80]" : "bg-[#ef4444]"
+              }`}
+            />
+            <span className="text-gray-400 text-sm">
+              {currentModeSettings.enabled ? "Game Mode Active" : "Game Mode Inactive"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {changesSaved && (
+              <span className="text-[#4ade80] text-sm font-medium flex items-center gap-1">
+                ✓ Changes saved
+              </span>
+            )}
+            <button
+              onClick={handleSave}
+              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-[#e94560] to-[#ff6b6b] text-white rounded-lg hover:shadow-lg hover:shadow-red-500/30 transition-all duration-200 font-medium"
+            >
+              <Save className="w-4 h-4" />
+              Save Changes
+            </button>
+            <button
+              className="flex items-center gap-2 px-4 py-2 bg-[#0f3460] text-gray-300 hover:bg-[#1a3a52] rounded-lg transition-all duration-200 border border-[#1a5f7a] font-medium"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Reset
+            </button>
+          </div>
+        </div>
+      </div>
       </div>
 
       {/* Last Updated */}

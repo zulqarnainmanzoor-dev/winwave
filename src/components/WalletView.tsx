@@ -14,6 +14,9 @@ export default function WalletView({ onBack }: WalletViewProps) {
     mainWalletBalance,
     thirdPartyWalletBalance,
     transferWallet,
+    uid,
+    wageringRequired,
+    withdrawalPassword,
   } = useUser();
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferDirection, setTransferDirection] = useState<'to-game' | 'to-main'>('to-game');
@@ -35,18 +38,71 @@ export default function WalletView({ onBack }: WalletViewProps) {
       return;
     }
 
-    const success = transferWallet(transferDirection, amount);
-    if (!success) {
-      alert(
-        transferDirection === 'to-game'
-          ? "Insufficient main wallet balance."
-          : "Insufficient game wallet balance."
-      );
+    // Call backend transfer endpoint
+    (async () => {
+      try {
+        const res = await fetch('/api/wallet/transfer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: uid, from_type: transferDirection === 'to-game' ? 'main_balance' : 'game_balance', to_type: transferDirection === 'to-game' ? 'game_balance' : 'main_balance', amount }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          alert(data.error || 'Transfer failed');
+          return;
+        }
+        setShowTransferModal(false);
+        setTransferAmount('');
+      } catch (e) {
+        console.error('Transfer error', e);
+        alert('Transfer failed');
+      }
+    })();
+  };
+
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
+  const [withdrawPin, setWithdrawPin] = useState('');
+
+  const openWithdraw = () => {
+    if (!withdrawalPassword) {
+      // redirect to set PIN page or notify
+      alert('Please set your withdrawal PIN before requesting withdrawal.');
+      window.location.href = '/set-pin';
       return;
     }
+    setShowWithdrawModal(true);
+  };
 
-    setShowTransferModal(false);
-    setTransferAmount("");
+  const handleWithdraw = async () => {
+    const amount = parseFloat(withdrawAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert('Enter valid amount');
+      return;
+    }
+    if (withdrawPin !== withdrawalPassword) {
+      alert('Invalid PIN');
+      return;
+    }
+    try {
+      const res = await fetch('/api/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: uid, amount, account_number: '', pin: withdrawPin }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        alert(data.error || 'Withdrawal failed');
+        return;
+      }
+      alert('Withdrawal request submitted');
+      setShowWithdrawModal(false);
+      setWithdrawAmount('');
+      setWithdrawPin('');
+    } catch (e) {
+      console.error('Withdraw error', e);
+      alert('Withdrawal failed');
+    }
   };
 
   return (
@@ -100,6 +156,14 @@ export default function WalletView({ onBack }: WalletViewProps) {
           >
             <ArrowRightLeft className="w-4 h-4" />
             {t('mainWalletTransfer')}
+          </button>
+
+          <button
+            type="button"
+            onClick={openWithdraw}
+            className="w-full mt-3 py-3 rounded-xl font-bold tracking-wide text-sm bg-white/5 text-white border border-white/10 hover:bg-white/10 transition-all flex items-center justify-center gap-2"
+          >
+            Withdraw
           </button>
 
           <p className="text-[10px] text-gray-500 text-center mt-4 leading-relaxed">
@@ -187,6 +251,63 @@ export default function WalletView({ onBack }: WalletViewProps) {
                 className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-amber-500 text-black hover:bg-amber-400"
               >
                 Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showWithdrawModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-4">
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowWithdrawModal(false)} />
+          <div className="bg-[#1C1C1E] rounded-2xl w-full max-w-sm relative z-10 border border-white/10 shadow-2xl p-5 animate-slide-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-white font-bold text-sm uppercase tracking-widest">Withdraw</h3>
+              <button onClick={() => setShowWithdrawModal(false)} className="text-gray-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-[#0A0A0B] rounded-xl border border-white/10 p-3 mb-4">
+              <span className="text-[10px] text-gray-500 uppercase tracking-wider block mb-1">Available (Main)</span>
+              <span className="text-amber-500 font-bold text-lg">Rs {mainWalletBalance.toFixed(2)}</span>
+            </div>
+
+            <div className="flex items-center bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 mb-4">
+              <span className="text-gray-400 font-bold text-sm mr-2 border-r border-white/10 pr-2">Rs</span>
+              <input
+                type="number"
+                value={withdrawAmount}
+                onChange={(e) => setWithdrawAmount(e.target.value)}
+                placeholder="Enter amount"
+                className="flex-1 bg-transparent outline-none text-white font-bold text-sm"
+              />
+            </div>
+
+            <div className="flex items-center bg-[#0A0A0B] border border-white/10 rounded-xl px-4 py-3 mb-5">
+              <input
+                type="password"
+                value={withdrawPin}
+                onChange={(e) => setWithdrawPin(e.target.value)}
+                placeholder="Enter Withdrawal PIN"
+                className="flex-1 bg-transparent outline-none text-white font-bold text-sm"
+              />
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowWithdrawModal(false)}
+                className="flex-1 py-2.5 rounded-xl font-bold text-xs border border-white/10 text-gray-300 hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleWithdraw}
+                className="flex-1 py-2.5 rounded-xl font-bold text-xs bg-amber-500 text-black hover:bg-amber-400"
+              >
+                Request Withdrawal
               </button>
             </div>
           </div>

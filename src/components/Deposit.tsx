@@ -8,10 +8,9 @@ import {
   Check,
 } from "lucide-react";
 import { useUser } from "../context/UserContext";
-import { supabase } from "../lib/supabaseClient";
 import { useLanguage } from "../context/LanguageContext";
 
-export default function DepositView({
+export default function Deposit({
   onBack,
   onTransactionClick,
 }: {
@@ -121,22 +120,7 @@ export default function DepositView({
     const targetUrl = links[amountToPay];
 
     if (targetUrl) {
-      // create a pending transaction record before redirect
-      try {
-        const txId = `TX-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
-        const userId = (userContext as any)?.uid || null;
-        supabase.from('transactions').insert([{ id: txId, user_id: userId, type: 'deposit', amount: amountToPay, status: 'pending', gateway_ref: targetUrl }]).then(() => {
-          // redirect after record created (best-effort)
-          window.location.href = targetUrl;
-        }).catch(() => {
-          window.location.href = targetUrl;
-        });
-        return;
-      } catch (e) {
-        // fallback to redirect
-        window.location.href = targetUrl;
-        return;
-      }
+      window.location.href = targetUrl;
     } else {
       alert("Automated deposits are only available for fixed packages right now. Please select a supported quick amount for the selected gateway.");
     }
@@ -387,17 +371,15 @@ export default function DepositView({
       </div>
 
       {/* Pay Now Button */}
-      <div className="fixed inset-x-0 bottom-0 p-4 bg-[#08101f] backdrop-blur-sm z-50 border-t border-white/10">
-        <div className="mx-auto w-full max-w-xs">
-          <button
-            onClick={handlePayNow}
-            type="button"
-            disabled={!isAmountSupported}
-            className={`w-full text-white font-bold text-lg py-3.5 rounded-full shadow-lg ${isAmountSupported ? 'bg-[#2563eb] hover:bg-[#1d4ed8] shadow-[#2563eb]/30' : 'bg-gray-600 opacity-60 cursor-not-allowed' } transition-all`}
-          >
-            Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
-          </button>
-        </div>
+      <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-[#08101f] backdrop-blur-sm z-50 border-t border-white/10">
+        <button
+          onClick={handlePayNow}
+          type="button"
+          disabled={!isAmountSupported}
+          className={`w-full text-white font-bold text-lg py-3.5 rounded-full shadow-lg ${isAmountSupported ? 'bg-[#2563eb] hover:bg-[#1d4ed8] shadow-[#2563eb]/30' : 'bg-gray-600 opacity-60 cursor-not-allowed' } transition-all`}
+        >
+          Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
+        </button>
       </div>
     </div>
   );

@@ -154,6 +154,12 @@ export default function TransactionView({ onBack }: { onBack: () => void }) {
                     {tx.type === 'move_in' ? '+' : '-'}Rs{tx.amount.toFixed(2)}
                   </span>
                 </div>
+                {tx.status === 'failed' && (tx as any).gateway_ref && (
+                  <div className="mt-3 bg-[#2b1313] border border-[#4b1212] rounded-lg p-3 text-sm text-[#ffb3b3]">
+                    <div className="font-bold text-xs">Rejected</div>
+                    <div className="text-[11px] mt-1">{(tx as any).gateway_ref}</div>
+                  </div>
+                )}
               </div>
             ))
           )}

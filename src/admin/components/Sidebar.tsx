@@ -10,6 +10,8 @@ import {
   LogOut,
   ChevronDown,
   Zap,
+  Menu,
+  X,
 } from "lucide-react";
 import { useAdmin, type AdminPage } from "../context/AdminContext";
 
@@ -73,11 +75,29 @@ const MENU_ITEMS: MenuItem[] = [
     label: "Settings",
     icon: <Settings className="w-5 h-5" />,
   },
+  {
+    id: "gift-codes",
+    label: "Gift Codes",
+    icon: <Zap className="w-5 h-5" />,
+  },
 ];
 
 export function Sidebar() {
-  const { currentPage, setCurrentPage } = useAdmin();
+  const { currentPage, setCurrentPage, adminRole } = useAdmin();
   const [expandedMenu, setExpandedMenu] = React.useState<AdminPage | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+
+  // Filter menu items based on admin role
+  const getMenuItems = (): MenuItem[] => {
+    if (adminRole === 'sub-admin') {
+      // Sub-admin can only see Agent Management
+      return MENU_ITEMS.filter(item => item.id === 'agents');
+    }
+    // Main admin sees all items
+    return MENU_ITEMS;
+  };
+
+  const menuItems = getMenuItems();
 
   const handleMenuClick = (item: MenuItem) => {
     if (item.submenu) {
@@ -85,6 +105,7 @@ export function Sidebar() {
     } else {
       setCurrentPage(item.id as AdminPage);
       setExpandedMenu(null);
+      setIsMenuOpen(false);
     }
   };
 
@@ -95,10 +116,18 @@ export function Sidebar() {
     return item.id === currentPage;
   };
 
+  const handleLogout = () => {
+    sessionStorage.removeItem('admin_authenticated');
+    sessionStorage.removeItem('admin_role');
+    window.location.href = '/#/admin/login';
+  };
+
+  const toggleMenu = () => setIsMenuOpen((prev) => !prev);
+
   return (
-    <aside className="w-64 bg-gradient-to-b from-[#1a1a2e] to-[#16213e] border-r border-[#0f3460] h-screen overflow-y-auto flex flex-col">
-      {/* Header */}
-      <div className="p-6 border-b border-[#0f3460]">
+    <>
+      {/* Mobile header with drawer button */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-[#0b1223] border-b border-[#0f3460] px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center">
             <span className="text-white font-bold text-lg">⚙️</span>
@@ -108,11 +137,34 @@ export function Sidebar() {
             <p className="text-gray-400 text-xs">Control Panel</p>
           </div>
         </div>
+        <button
+          onClick={toggleMenu}
+          className="text-white rounded-lg border border-white/10 p-2 hover:bg-white/5 transition"
+          aria-label="Toggle menu"
+        >
+          {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </button>
+      </div>
+
+      <aside className={`fixed inset-y-0 left-0 z-30 w-64 bg-gradient-to-b from-[#1a1a2e] to-[#16213e] border-r border-[#0f3460] h-screen overflow-y-auto flex flex-col transform transition-transform duration-300 ease-in-out ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static md:w-64`}>
+        {/* Header */}
+        <div className="p-6 border-b border-[#0f3460] md:mt-0 mt-14">
+          <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center">
+            <span className="text-white font-bold text-lg">⚙️</span>
+          </div>
+          <div>
+            <h2 className="text-white font-bold text-lg">WinWave Admin</h2>
+            <p className="text-gray-400 text-xs">
+              {adminRole === 'sub-admin' ? 'Sub-Admin Panel' : 'Control Panel'}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Navigation Menu */}
       <nav className="flex-1 px-4 py-6 space-y-2">
-        {MENU_ITEMS.map((item) => (
+        {menuItems.map((item) => (
           <div key={item.id}>
             <button
               onClick={() => handleMenuClick(item)}
@@ -151,6 +203,7 @@ export function Sidebar() {
                     onClick={() => {
                       setCurrentPage(subitem.id as AdminPage);
                       setExpandedMenu(null);
+                      setIsMenuOpen(false);
                     }}
                     className={`w-full flex items-center gap-2 px-4 py-2 rounded-lg text-sm transition-all duration-200 ${
                       currentPage === subitem.id
@@ -175,12 +228,25 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="p-4 border-t border-[#0f3460]">
-        <button className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-red-400 hover:bg-[#0f3460] rounded-lg transition-all duration-200">
+        <button 
+          onClick={handleLogout}
+          className="w-full flex items-center gap-3 px-4 py-3 text-gray-400 hover:text-red-400 hover:bg-[#0f3460] rounded-lg transition-all duration-200"
+        >
           <LogOut className="w-5 h-5" />
           <span className="font-medium text-sm">Logout</span>
         </button>
         <p className="text-gray-600 text-xs mt-4 text-center">© 2026 WinWave</p>
       </div>
     </aside>
+
+      {/* Mobile backdrop */}
+      {isMenuOpen && (
+        <button
+          onClick={toggleMenu}
+          className="fixed inset-0 z-20 bg-black/40 md:hidden"
+          aria-label="Close menu"
+        />
+      )}
+    </>
   );
 }

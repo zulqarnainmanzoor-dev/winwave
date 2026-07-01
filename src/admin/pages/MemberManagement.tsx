@@ -269,8 +269,8 @@ export function MemberManagement() {
 
         {/* Adjustment Modal */}
         {showAdjustmentModal && selectedMember && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] max-w-md w-full mx-4">
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="w-full max-w-md md:max-w-lg mx-auto rounded-2xl border border-[#0f3460] bg-gradient-to-br from-[#1a1a2e] to-[#16213e] p-6">
               <h3 className="text-white font-bold text-lg mb-4">Adjust Balance</h3>
               <p className="text-gray-400 text-sm mb-4">
                 Current Balance: <span className="text-[#3b82f6] font-bold">Rs {selectedMember.balance.toLocaleString()}</span>
