@@ -5,6 +5,7 @@ import './index.css';
 import { LanguageProvider } from './context/LanguageContext.tsx';
 import { UserProvider } from './context/UserContext.tsx';
 import { ToastProvider } from './context/ToastContext.tsx';
+import { Analytics } from '@vercel/analytics/react';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -12,6 +13,7 @@ createRoot(document.getElementById('root')!).render(
       <LanguageProvider>
         <ToastProvider>
           <App />
+          <Analytics />
         </ToastProvider>
       </LanguageProvider>
     </UserProvider>
