@@ -7,6 +7,7 @@ create table if not exists public.users (
   id uuid primary key references auth.users(id) on delete cascade,
   phone_number text unique,
   referral_code text unique,
+  inviter_code text default null,
   referred_by uuid references public.users(id),
   withdrawal_pin text,
   bank_details jsonb default '{}'::jsonb,

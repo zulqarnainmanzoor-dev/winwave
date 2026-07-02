@@ -16,13 +16,20 @@ async function startServer() {
   const { default: apiRouter } = await import("./backend/api/api");
 
   const app = express();
-  const PORT = Number(process.env.PORT || 4000);
+  const PORT = Number(process.env.PORT || 3000);
 
   app.use(express.json());
   app.use('/assets', express.static(path.join(process.cwd(), 'assets')));
 
   // API Routes
   app.use("/api", apiRouter);
+
+  // Always return JSON on internal API errors so the frontend does not fail parsing
+  app.use((err: any, req: any, res: any, next: any) => {
+    if (res.headersSent) return next(err);
+    console.error('Unexpected API error:', err);
+    res.status(500).json({ ok: false, error: 'Internal server error', details: err?.message || 'Unknown error' });
+  });
 
   // Admin dashboard route: serve the frontend app at /api/admin/:secret
   const adminSecret = process.env.ADMIN_SECRET_ID || "3399944";

@@ -281,13 +281,13 @@ export interface Database {
 
 type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || '';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || '';
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || '';
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
 const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
 
 if (!supabaseUrl || !supabaseKey) {
-  console.warn('Supabase backend client created without URL or key. Set SUPABASE_URL and a valid SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY.');
+  console.warn('Supabase backend client created without URL or key. Set SUPABASE_URL or VITE_SUPABASE_URL, and a valid SERVICE_ROLE_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, or VITE_SUPABASE_ANON_KEY.');
 }
 
 export const supabase: SupabaseClient<Database> = createClient<Database>(supabaseUrl, supabaseKey, {
@@ -296,7 +296,18 @@ export const supabase: SupabaseClient<Database> = createClient<Database>(supabas
   },
 });
 
+const supabaseAdminKey = supabaseServiceRoleKey || '';
+if (!supabaseAdminKey) {
+  console.warn('Supabase admin client is missing a service role key; server-side writes may be blocked by RLS.');
+}
+
+export const supabaseAdmin: SupabaseClient<Database> = createClient<Database>(supabaseUrl, supabaseAdminKey, {
+  auth: {
+    persistSession: false,
+  },
+});
+
 export const isServiceRoleKey = () => Boolean(
-  supabaseServiceRoleKey && supabaseServiceRoleKey.startsWith('sb_service_role_')
+  supabaseServiceRoleKey && supabaseServiceRoleKey.length > 0
 );
    

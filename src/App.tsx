@@ -130,6 +130,9 @@ const App: React.FC = () => {
   const handleTabChange = (tab: string) => {
     switch (tab) {
       case 'home':
+        setCurrentView('home');
+        setPreviousView('home');
+        setVipInitialLevel(undefined);
         navigate('/');
         break;
       case 'wallet':

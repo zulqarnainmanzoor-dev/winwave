@@ -386,19 +386,23 @@ export default function DepositView({
         </div>
       </div>
 
-      {/* Pay Now Button */}
-      <div className="fixed inset-x-0 bottom-0 p-4 bg-[#08101f] backdrop-blur-sm z-50 border-t border-white/10">
-        <div className="mx-auto w-full max-w-xs">
-          <button
-            onClick={handlePayNow}
-            type="button"
-            disabled={!isAmountSupported}
-            className={`w-full text-white font-bold text-lg py-3.5 rounded-full shadow-lg ${isAmountSupported ? 'bg-[#2563eb] hover:bg-[#1d4ed8] shadow-[#2563eb]/30' : 'bg-gray-600 opacity-60 cursor-not-allowed' } transition-all`}
-          >
-            Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
-          </button>
-        </div>
-      </div>
+{/* Pay Now Button - Fixed Center (Non-Scrollable) with Neon Blue Glow */}
+<div className="fixed bottom-[74px] left-0 right-0 z-40 px-4 max-w-md mx-auto pointer-events-none">
+  <div className="w-full flex justify-center pointer-events-auto">
+    <button
+      onClick={handlePayNow}
+      type="button"
+      disabled={!isAmountSupported}
+      className={`w-11/12 max-w-xs text-white font-bold text-base py-3 rounded-full transition-all duration-300 active:scale-[0.97] border ${
+        isAmountSupported 
+          ? 'bg-[#1C2DFF] hover:bg-[#2563eb] border-blue-400/40 shadow-[0_0_18px_rgba(28,45,255,0.6)] hover:shadow-[0_0_25px_rgba(37,99,235,0.8)] cursor-pointer' 
+          : 'bg-slate-800/90 border-white/5 opacity-50 cursor-not-allowed' 
+      }`}
+    >
+      Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
+    </button>
+  </div>
+</div>
     </div>
   );
 }

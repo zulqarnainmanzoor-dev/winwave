@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { supabase } from '../database/db';
+import { supabase, supabaseAdmin } from '../database/db';
 
 const router = Router();
 
@@ -8,46 +8,85 @@ const router = Router();
 router.post('/transfer', async (req, res) => {
   try {
     const { user_id, from_type, to_type, amount } = req.body;
-    if (!user_id || !from_type || !to_type || !amount) return res.status(400).json({ ok: false, error: 'Missing parameters' });
-    const p_amount = Number(amount);
-    if (!Number.isFinite(p_amount) || p_amount <= 0) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    if (!user_id || !from_type || !to_type || amount == null) {
+      return res.status(400).json({ ok: false, error: 'Missing parameters' });
+    }
 
-    // If transferring from game -> main, check wagering requirement
+    const p_amount = Number(amount);
+    if (!Number.isFinite(p_amount) || p_amount <= 0) {
+      return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    }
+
+    if (from_type === to_type) {
+      return res.status(400).json({ ok: false, error: 'from_type and to_type cannot be the same' });
+    }
+
+    if (!['main_balance', 'game_balance'].includes(from_type) || !['main_balance', 'game_balance'].includes(to_type)) {
+      return res.status(400).json({ ok: false, error: 'Invalid balance types' });
+    }
+
+    const { data: walletRow, error: walletErr } = await supabaseAdmin
+      .from('wallets')
+      .select('main_balance, game_balance')
+      .eq('user_id', user_id)
+      .maybeSingle();
+
+    if (walletErr) {
+      console.error('Failed to fetch wallet info:', walletErr);
+      return res.status(500).json({ ok: false, error: 'Failed to fetch wallet info' });
+    }
+
+    if (!walletRow) {
+      return res.status(404).json({ ok: false, error: 'Wallet not found for user' });
+    }
+
+    const mainBalance = Number(walletRow.main_balance || 0);
+    const gameBalance = Number(walletRow.game_balance || 0);
+    let newMain = mainBalance;
+    let newGame = gameBalance;
+
+    if (from_type === 'main_balance' && to_type === 'game_balance') {
+      if (mainBalance < p_amount) {
+        return res.status(400).json({ ok: false, error: 'Insufficient main balance' });
+      }
+      newMain = mainBalance - p_amount;
+      newGame = gameBalance + p_amount;
+    }
+
     if (from_type === 'game_balance' && to_type === 'main_balance') {
-      const { data: userRow, error: userErr } = await supabase
+      if (gameBalance < p_amount) {
+        return res.status(400).json({ ok: false, error: 'Insufficient game balance' });
+      }
+
+      const { data: userRow, error: userErr } = await supabaseAdmin
         .from('users')
         .select('total_bets, wagering_required')
         .eq('id', user_id)
         .maybeSingle();
 
-      if (userErr) {
-        console.error('Failed to fetch user wagering info:', userErr);
-        return res.status(500).json({ ok: false, error: 'Failed to validate wagering requirement' });
+      if (!userErr && userRow) {
+        const totalBets = Number(userRow.total_bets || 0);
+        const wageringRequired = Number(userRow.wagering_required || 0);
+        if (totalBets < wageringRequired) {
+          const remaining = wageringRequired - totalBets;
+          return res.status(400).json({ ok: false, error: `Please complete wagering requirement (Need to Bet: ${remaining})`, remaining });
+        }
       }
 
-      const totalBets = Number(userRow?.total_bets || 0);
-      const wageringRequired = Number(userRow?.wagering_required || 0);
-
-      if (totalBets < wageringRequired) {
-        const remaining = wageringRequired - totalBets;
-        return res.status(400).json({ ok: false, error: `Please complete wagering requirement (Need to Bet: ${remaining})`, remaining });
-      }
+      newMain = mainBalance + p_amount;
+      newGame = gameBalance - p_amount;
     }
 
-    // Call RPC for atomic transfer
-    const { data, error } = await supabase.rpc('transfer_balance', {
-      p_from_type: from_type,
-      p_to_type: to_type,
-      p_amount: p_amount,
-      p_user_id: user_id,
-    });
+    const { error: updateError } = await supabaseAdmin
+      .from('wallets')
+      .upsert({ user_id, main_balance: newMain, game_balance: newGame }, { onConflict: 'user_id' });
 
-    if (error) {
-      console.error('transfer_balance rpc error:', error);
-      return res.status(400).json({ ok: false, error: error.message || 'Transfer failed' });
+    if (updateError) {
+      console.error('Failed to update wallet balances:', updateError);
+      return res.status(500).json({ ok: false, error: 'Failed to update wallet balances' });
     }
 
-    return res.json({ ok: true, result: data });
+    return res.json({ ok: true, result: { main_balance: newMain, game_balance: newGame } });
   } catch (err: any) {
     console.error('wallet transfer failed', err);
     return res.status(500).json({ ok: false, error: err.message });

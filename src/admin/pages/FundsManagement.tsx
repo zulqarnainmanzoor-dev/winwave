@@ -1,129 +1,134 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, X, Clock } from "lucide-react";
+import { Check, X, Clock, RefreshCw, Search } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
 type RequestStatus = "pending" | "approved" | "rejected" | "completed";
+type RequestType = "withdraw" | "deposit";
+
+interface UserInfo {
+  phone: string;
+  invite_code: string;
+  is_agent: boolean;
+  main_balance: number;
+}
 
 interface FundsRequest {
   id: string;
   userId: string;
-  uid: string;
-  userName: string;
+  // enriched from public.users
+  phone: string;
+  invite_code: string;
+  is_agent: boolean;
+  // request fields
   amount: number;
   method: string;
-  account: string;
-  dateRequested: string;
+  account_name: string;
+  account_number: string;
   status: RequestStatus;
-  type: "withdraw" | "deposit";
-  gatewayRef?: string | null;
-  bankName?: string | null;
-  accountName?: string | null;
-  accountNumber?: string | null;
-  reason?: string;
+  type: RequestType;
+  request_type_label: string; // "Agent Salary Release" | "Member Withdrawal" | "Deposit"
+  gateway_ref: string | null;
+  reason: string | null;
+  created_at: string;
 }
 
 interface FundsManagementProps {
   type: "withdraw" | "deposit";
 }
 
+const STATUS_STYLE: Record<string, string> = {
+  pending:   "bg-amber-500/20 text-amber-400 border border-amber-500/40",
+  approved:  "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40",
+  completed: "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40",
+  rejected:  "bg-red-500/20 text-red-400 border border-red-500/40",
+};
+
 export function FundsManagement({ type }: FundsManagementProps) {
-  const [requests, setRequests] = useState<FundsRequest[]>([]);
-  const [selectedRequest, setSelectedRequest] = useState<FundsRequest | null>(null);
+  const [requests, setRequests]               = useState<FundsRequest[]>([]);
+  const [filtered, setFiltered]               = useState<FundsRequest[]>([]);
+  const [selected, setSelected]               = useState<FundsRequest | null>(null);
+  const [search, setSearch]                   = useState("");
+  const [statusFilter, setStatusFilter]       = useState<"all" | RequestStatus>("all");
   const [showRejectModal, setShowRejectModal] = useState(false);
-  const [rejectReason, setRejectReason] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [rejectReason, setRejectReason]       = useState("");
+  const [loading, setLoading]                 = useState(false);
+  const [actionLoading, setActionLoading]     = useState(false);
+  const [error, setError]                     = useState("");
 
-  const title = type === "withdraw" ? "Withdrawal Requests" : "Deposit Requests";
-  const description =
-    type === "withdraw"
-      ? "Approve or reject user withdrawal requests"
-      : "Review deposit activity and update transaction status";
-
-  const pendingCount = useMemo(
-    () => requests.filter((r) => r.status === "pending").length,
-    [requests],
-  );
-
+  // ── Fetch & enrich ────────────────────────────────────────────
   const fetchRequests = async () => {
     setLoading(true);
     setError("");
-    setSelectedRequest(null);
-
+    setSelected(null);
     try {
+      let rows: any[] = [];
+
       if (type === "withdraw") {
-        const withdrawRequests = supabase.from("withdraw_requests") as any;
-        const { data, error } = await withdrawRequests
-          .select("id,user_id,amount,bank_name,account_name,account_number,status,created_at,reason")
+        const { data, error: e } = await supabase
+          .from("withdraw_requests" as any)
+          .select("id, user_id, amount, bank_name, account_name, account_number, status, created_at, reason")
           .order("created_at", { ascending: false })
-          .limit(100);
-
-        if (error) throw error;
-
-        const userIds = Array.from(new Set((data || []).map((row: any) => row?.user_id).filter(Boolean)));
-        let bankData: any[] = [];
-
-        if (userIds.length > 0) {
-          const { data: banks, error: bankError } = await supabase
-            .from("user_banks")
-            .select("user_id,bank_name,account_name,account_number")
-            .in("user_id", userIds);
-
-          if (!bankError && banks) {
-            bankData = banks;
-          }
-        }
-
-        setRequests(
-          (data || []).map((row: any) => {
-            const bank = bankData.find((item) => item.user_id === row.user_id);
-            const method = row.bank_name || bank?.bank_name || "Bank Transfer";
-            const account = row.account_number || row.account_name || bank?.account_number || bank?.account_name || "-";
-
-            return {
-              id: row.id,
-              userId: row.user_id,
-              uid: row.user_id,
-              userName: row.user_id,
-              amount: Number(row.amount || 0),
-              method,
-              account,
-              dateRequested: row.created_at || "",
-              status: (row.status as RequestStatus) || "pending",
-              type: "withdraw",
-              bankName: row.bank_name ?? bank?.bank_name ?? null,
-              accountName: row.account_name ?? bank?.account_name ?? null,
-              accountNumber: row.account_number ?? bank?.account_number ?? null,
-              reason: row.reason ?? null,
-            } as any;
-          }),
-        );
+          .limit(200);
+        if (e) throw e;
+        rows = data || [];
       } else {
-        const transactionsTable = supabase.from("transactions") as any;
-        const { data, error } = await transactionsTable
-          .select("id,user_id,amount,status,gateway_ref,created_at")
+        const { data, error: e } = await supabase
+          .from("transactions")
+          .select("id, user_id, amount, status, gateway_ref, created_at")
           .eq("type", "deposit")
           .order("created_at", { ascending: false })
-          .limit(100);
-
-        if (error) throw error;
-
-        setRequests(
-          (data || []).map((row) => ({
-            id: row.id,
-            userId: row.user_id,
-            uid: row.user_id,
-            userName: row.user_id,
-            amount: row.amount,
-            method: row.gateway_ref ? "Payment Gateway" : "Deposit",
-            account: row.gateway_ref || "Manual",
-            dateRequested: row.created_at,
-            status: (row.status as RequestStatus) || "pending",
-            type: "deposit",
-            gatewayRef: row.gateway_ref,
-          })),
-        );
+          .limit(200);
+        if (e) throw e;
+        rows = data || [];
       }
+
+      // Enrich with user info in one batch query
+      const userIds = [...new Set(rows.map((r: any) => r.user_id).filter(Boolean))];
+      let userMap: Record<string, UserInfo> = {};
+
+      if (userIds.length > 0) {
+        const { data: users } = await supabase
+          .from("users")
+          .select("id, phone_number, invite_code, is_agent, main_balance")
+          .in("id", userIds);
+
+        (users || []).forEach((u: any) => {
+          userMap[u.id] = {
+            phone:       u.phone_number || "—",
+            invite_code: u.invite_code  || "—",
+            is_agent:    Boolean(u.is_agent),
+            main_balance: Number(u.main_balance ?? 0),
+          };
+        });
+      }
+
+      const enriched: FundsRequest[] = rows.map((row: any) => {
+        const user = userMap[row.user_id] || { phone: "—", invite_code: "—", is_agent: false, main_balance: 0 };
+        const isAgent = user.is_agent;
+
+        let request_type_label = type === "deposit" ? "Deposit" : isAgent ? "Agent Salary Release" : "Member Withdrawal";
+
+        return {
+          id:                 row.id,
+          userId:             row.user_id,
+          phone:              user.phone,
+          invite_code:        user.invite_code,
+          is_agent:           isAgent,
+          amount:             Number(row.amount ?? 0),
+          method:             row.bank_name || (row.gateway_ref ? "Payment Gateway" : "Manual"),
+          account_name:       row.account_name || "—",
+          account_number:     row.account_number || row.gateway_ref || "—",
+          status:             (row.status as RequestStatus) || "pending",
+          type:               type,
+          request_type_label,
+          gateway_ref:        row.gateway_ref ?? null,
+          reason:             row.reason ?? null,
+          created_at:         row.created_at || "",
+        };
+      });
+
+      setRequests(enriched);
+      setFiltered(enriched);
     } catch (err: any) {
       setError(err?.message || "Failed to load requests");
     } finally {
@@ -131,356 +136,415 @@ export function FundsManagement({ type }: FundsManagementProps) {
     }
   };
 
+  useEffect(() => { fetchRequests(); }, [type]);
+
+  // ── Search + filter ───────────────────────────────────────────
   useEffect(() => {
-    fetchRequests();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type]);
-
-  const updateWithdrawRequest = async (requestId: string, status: "approved" | "rejected", reason?: string) => {
-    const withdrawRequests = supabase.from("withdraw_requests") as any;
-    const payload: any = { status };
-    if (reason) payload.reason = reason;
-    const { error } = await withdrawRequests
-      .update(payload)
-      .eq("id", requestId);
-
-    if (error) throw error;
-  };
-
-  const refundUserForWithdraw = async (request: FundsRequest) => {
-    const usersTable = supabase.from("users") as any;
-    const { data: userRow, error: userError } = await usersTable
-      .select("main_balance")
-      .eq("id", request.userId)
-      .maybeSingle();
-
-    if (userError) throw userError;
-
-    const currentBalance = Number(userRow?.main_balance || 0);
-    const newBalance = currentBalance + request.amount;
-
-    const usersUpdateTable = supabase.from("users") as any;
-    const { error: userUpdateError } = await usersUpdateTable
-      .update({ main_balance: newBalance })
-      .eq("id", request.userId);
-
-    if (userUpdateError) throw userUpdateError;
-
-    const walletsTable = supabase.from("wallets") as any;
-    const { data: walletRow, error: walletError } = await walletsTable
-      .select("main_balance")
-      .eq("user_id", request.userId)
-      .maybeSingle();
-
-    if (walletError) {
-      console.warn("Failed to read wallet row for refund:", walletError);
-      return;
+    let result = requests;
+    if (statusFilter !== "all") {
+      result = result.filter(r => r.status === statusFilter || (statusFilter === "approved" && r.status === "completed"));
     }
-
-    if (walletRow) {
-      const walletBalance = Number(walletRow.main_balance || 0);
-      const walletsTable = supabase.from("wallets") as any;
-      const { error: walletUpdateError } = await walletsTable
-        .update({ main_balance: walletBalance + request.amount })
-        .eq("user_id", request.userId);
-
-      if (walletUpdateError) {
-        console.warn("Failed to refund wallet row:", walletUpdateError);
-      }
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      result = result.filter(r =>
+        r.id.toLowerCase().includes(q) ||
+        r.phone.includes(q) ||
+        r.invite_code.includes(q) ||
+        r.userId.toLowerCase().includes(q)
+      );
     }
-  };
+    setFiltered(result);
+  }, [search, statusFilter, requests]);
 
+  // ── Approve ───────────────────────────────────────────────────
   const handleApprove = async () => {
-    if (!selectedRequest) return;
-    setLoading(true);
+    if (!selected) return;
+    setActionLoading(true);
     setError("");
-
     try {
-      if (selectedRequest.type === "withdraw") {
-        await updateWithdrawRequest(selectedRequest.id, "approved");
+      if (selected.type === "withdraw") {
+        // Mark approved — balance was already deducted when user submitted
+        const { error: e } = await (supabase.from("withdraw_requests") as any)
+          .update({ status: "approved" })
+          .eq("id", selected.id);
+        if (e) throw e;
       } else {
-        const transactionsTable = supabase.from("transactions") as any;
-        const { error } = await transactionsTable
-          .update({ status: "completed" })
-          .eq("id", selectedRequest.id);
+        // Deposit: mark completed + credit user balance
+        const { data: userRow } = await supabase
+          .from("users")
+          .select("main_balance")
+          .eq("id", selected.userId)
+          .maybeSingle();
 
-        if (error) throw error;
+        const bonus = parseFloat((selected.amount * 0.02).toFixed(2));
+        const newBal = Number(userRow?.main_balance ?? 0) + selected.amount + bonus;
+
+        const { error: balErr } = await supabase
+          .from("users")
+          .update({ main_balance: newBal })
+          .eq("id", selected.userId);
+        if (balErr) throw balErr;
+
+        const { error: txErr } = await supabase
+          .from("transactions")
+          .update({ status: "completed" })
+          .eq("id", selected.id);
+        if (txErr) throw txErr;
       }
 
       await fetchRequests();
-      setSelectedRequest((prev) => prev && { ...prev, status: selectedRequest.type === "withdraw" ? "approved" : "completed" });
     } catch (err: any) {
-      setError(err?.message || "Failed to update status");
+      setError(err?.message || "Approve failed");
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
+  // ── Reject (refund balance for withdrawals) ───────────────────
   const handleReject = async () => {
-    if (!selectedRequest || selectedRequest.type !== "withdraw") return;
-    if (!rejectReason.trim()) {
-      setError("Please provide a rejection reason.");
+    if (!selected || !rejectReason.trim()) {
+      setError("Please enter a rejection reason.");
       return;
     }
-
-    setLoading(true);
+    setActionLoading(true);
     setError("");
-
     try {
-      await refundUserForWithdraw(selectedRequest);
-      await updateWithdrawRequest(selectedRequest.id, "rejected", rejectReason);
+      if (selected.type === "withdraw") {
+        // Refund the amount back to user's main_balance
+        const { data: userRow } = await supabase
+          .from("users")
+          .select("main_balance")
+          .eq("id", selected.userId)
+          .maybeSingle();
 
-      // Insert a failed transaction record so it appears in the user's transaction history with remarks
-      try {
-        const txId = `TX-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
-        const { error: txError } = await supabase.from("transactions").insert([{ id: txId, user_id: selectedRequest.userId, type: 'withdraw', amount: selectedRequest.amount, status: 'failed', gateway_ref: rejectReason }]);
-        if (txError) console.warn('Failed to insert transaction record for rejection', txError);
-      } catch (e) {
-        console.warn(e);
+        const refunded = Number(userRow?.main_balance ?? 0) + selected.amount;
+        await supabase.from("users").update({ main_balance: refunded }).eq("id", selected.userId);
+
+        await (supabase.from("withdraw_requests") as any)
+          .update({ status: "rejected", reason: rejectReason })
+          .eq("id", selected.id);
+      } else {
+        await supabase
+          .from("transactions")
+          .update({ status: "failed", gateway_ref: rejectReason })
+          .eq("id", selected.id);
       }
+
       setShowRejectModal(false);
       setRejectReason("");
       await fetchRequests();
-      setSelectedRequest((prev) => prev && { ...prev, status: "rejected", reason: rejectReason });
     } catch (err: any) {
-      setError(err?.message || "Failed to reject request");
+      setError(err?.message || "Reject failed");
     } finally {
-      setLoading(false);
+      setActionLoading(false);
     }
   };
 
+  // ── Stats ─────────────────────────────────────────────────────
+  const stats = useMemo(() => ({
+    pending:   requests.filter(r => r.status === "pending").length,
+    approved:  requests.filter(r => r.status === "approved" || r.status === "completed").length,
+    rejected:  requests.filter(r => r.status === "rejected").length,
+    total:     requests.reduce((s, r) => s + r.amount, 0),
+    agents:    requests.filter(r => r.is_agent).length,
+  }), [requests]);
+
+  const title = type === "withdraw" ? "Withdrawal Requests" : "Deposit Requests";
+
   return (
-    <div className="flex-1 overflow-auto">
-      <div className="p-8">
+    <div className="flex-1 overflow-auto bg-[#0a0a0b] min-h-screen">
+      <div className="p-6">
+
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">{title}</h1>
-          <p className="text-gray-400">{description}</p>
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-white">{title}</h1>
+            <p className="text-gray-400 text-sm mt-1">
+              {type === "withdraw" ? "Approve or reject withdrawal requests from members and agents" : "Review and approve deposit transactions"}
+            </p>
+          </div>
+          <button
+            onClick={fetchRequests}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-[#1a1a2e] border border-[#0f3460] text-gray-300 rounded-lg hover:border-amber-500/50 transition-all text-sm"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
         </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-5 gap-3 mb-6">
           {[
-            { label: "Pending", value: pendingCount, color: "from-[#fbbf24]" },
-            {
-              label: "Approved",
-              value: requests.filter((r) => r.status === "approved" || r.status === "completed").length,
-              color: "from-[#4ade80]",
-            },
-            {
-              label: "Rejected",
-              value: requests.filter((r) => r.status === "rejected").length,
-              color: "from-[#ef4444]",
-            },
-            {
-              label: "Total Amount",
-              value: `Rs ${requests.reduce((sum, r) => sum + r.amount, 0).toLocaleString()}`,
-              color: "from-[#3b82f6]",
-            },
-          ].map((stat, idx) => (
-            <div
-              key={idx}
-              className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460]"
-            >
-              <p className="text-gray-400 text-sm mb-2">{stat.label}</p>
-              <p className={`text-2xl font-bold text-white`}>{stat.value}</p>
+            { label: "Pending",  value: stats.pending,                        color: "text-amber-400",   bg: "border-amber-500/30" },
+            { label: "Approved", value: stats.approved,                       color: "text-emerald-400", bg: "border-emerald-500/30" },
+            { label: "Rejected", value: stats.rejected,                       color: "text-red-400",     bg: "border-red-500/30" },
+            { label: "Agents",   value: stats.agents,                         color: "text-blue-400",    bg: "border-blue-500/30" },
+            { label: "Total Rs", value: `${stats.total.toLocaleString()}`,    color: "text-white",       bg: "border-white/10" },
+          ].map((s, i) => (
+            <div key={i} className={`bg-[#1a1a2e] rounded-xl p-4 border ${s.bg}`}>
+              <p className="text-gray-400 text-xs mb-1">{s.label}</p>
+              <p className={`text-xl font-black ${s.color}`}>{s.value}</p>
             </div>
           ))}
         </div>
 
         {error && (
-          <div className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
-            {error}
-          </div>
+          <div className="mb-4 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>
         )}
 
-        {/* Main Content */}
-        <div className="grid grid-cols-3 gap-8">
-          {/* Requests List */}
-          <div className="col-span-2">
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460] overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-[#0f3460] border-b border-[#1a5f7a]">
-                      <th className="text-left text-gray-400 font-semibold py-4 px-6">Request ID</th>
-                      <th className="text-left text-gray-400 font-semibold py-4 px-6">User</th>
-                      <th className="text-left text-gray-400 font-semibold py-4 px-6">Amount</th>
-                      <th className="text-left text-gray-400 font-semibold py-4 px-6">Method</th>
-                      <th className="text-left text-gray-400 font-semibold py-4 px-6">Date</th>
-                      <th className="text-left text-gray-400 font-semibold py-4 px-6">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {loading ? (
-                      <tr>
-                        <td colSpan={6} className="text-center py-8 text-gray-400">
-                          Loading requests...
-                        </td>
-                      </tr>
-                    ) : requests.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="text-center py-8 text-gray-400">
-                          No requests found.
-                        </td>
-                      </tr>
-                    ) : (
-                      requests.map((request) => (
-                        <tr
-                          key={request.id}
-                          onClick={() => setSelectedRequest(request)}
-                          className={`border-b border-[#0f3460] cursor-pointer transition-all ${
-                            selectedRequest?.id === request.id
-                              ? "bg-[#0f3460] border-l-4 border-[#e94560]"
-                              : "hover:bg-[#0f3460]"
-                          }`}
-                        >
-                          <td className="text-white font-bold py-4 px-6">{request.id}</td>
-                          <td className="py-4 px-6">
-                            <div>
-                              <p className="text-white font-medium">{request.userName}</p>
-                              <p className="text-gray-400 text-xs">{request.uid}</p>
-                            </div>
-                          </td>
-                          <td className="text-[#fbbf24] font-bold py-4 px-6">
-                            Rs {request.amount.toLocaleString()}
-                          </td>
-                          <td className="text-gray-300 py-4 px-6">{request.method}</td>
-                          <td className="text-gray-400 text-xs py-4 px-6">{request.dateRequested}</td>
-                          <td className="py-4 px-6">
-                            <span
-                              className={`px-3 py-1 rounded-full text-xs font-semibold inline-flex items-center gap-1 ${
-                                request.status === "pending"
-                                  ? "bg-[#fbbf24]/20 text-[#fbbf24]"
-                                  : request.status === "approved" || request.status === "completed"
-                                    ? "bg-[#4ade80]/20 text-[#4ade80]"
-                                    : "bg-[#ef4444]/20 text-[#ef4444]"
-                              }`}
-                            >
-                              {request.status === "pending" && <Clock className="w-3 h-3" />}
-                              {(request.status === "approved" || request.status === "completed") && <Check className="w-3 h-3" />}
-                              {request.status === "rejected" && <X className="w-3 h-3" />}
-                              {request.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+        {/* Search + Filter */}
+        <div className="flex gap-3 mb-4">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by phone, invite code, or request ID..."
+              className="w-full bg-[#1a1a2e] border border-[#0f3460] text-white pl-9 pr-4 py-2 rounded-lg text-sm focus:outline-none focus:border-amber-500/50"
+            />
           </div>
-
-          {/* Details Panel */}
-          {selectedRequest && (
-            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460] p-6 h-fit">
-              <h3 className="text-white font-bold text-lg mb-6">Request Details</h3>
-
-              <div className="space-y-4 mb-6">
-                <div>
-                  <p className="text-gray-400 text-sm">Request ID</p>
-                  <p className="text-white font-bold">{selectedRequest.id}</p>
-                </div>
-                <div>
-                  <p className="text-gray-400 text-sm">User</p>
-                  <p className="text-white">{selectedRequest.userName}</p>
-                  <p className="text-gray-500 text-xs">{selectedRequest.uid}</p>
-                </div>
-                <div>
-                  <p className="text-gray-400 text-sm">Amount Requested</p>
-                  <p className="text-[#fbbf24] font-bold text-lg">
-                    Rs {selectedRequest.amount.toLocaleString()}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-gray-400 text-sm">Payment Method</p>
-                  <p className="text-white">{selectedRequest.method}</p>
-                </div>
-                <div className="bg-[#0f3460] rounded-lg p-3">
-                  <p className="text-gray-400 text-sm mb-1">{type === "withdraw" ? "Destination" : "Source"} Account</p>
-                  <p className="text-white font-mono text-sm">{selectedRequest.account}</p>
-                </div>
-                <div>
-                  <p className="text-gray-400 text-sm">Requested On</p>
-                  <p className="text-white">{selectedRequest.dateRequested}</p>
-                </div>
-                {selectedRequest.type === "deposit" && selectedRequest.gatewayRef && (
-                  <div>
-                    <p className="text-gray-400 text-sm">Gateway Reference</p>
-                    <p className="text-white font-mono text-sm">{selectedRequest.gatewayRef}</p>
-                  </div>
-                )}
-              </div>
-
-              {selectedRequest.status === "rejected" && selectedRequest.reason && (
-                <div className="bg-[#ef4444]/20 border border-[#ef4444]/50 rounded-lg p-3 mb-6">
-                  <p className="text-[#ef4444] text-sm font-bold mb-1">Rejection Reason</p>
-                  <p className="text-gray-300 text-sm">{selectedRequest.reason}</p>
-                </div>
-              )}
-
-              {selectedRequest.status === "pending" && (
-                <div className="space-y-3">
-                  <button
-                    onClick={handleApprove}
-                    disabled={loading}
-                    className="w-full py-2 px-4 bg-gradient-to-r from-[#4ade80] to-[#22c55e] text-white rounded-lg hover:shadow-lg hover:shadow-green-500/30 transition-all font-medium disabled:opacity-50"
-                  >
-                    ✓ {selectedRequest.type === "withdraw" ? "Approve Request" : "Mark Completed"}
-                  </button>
-                  {selectedRequest.type === "withdraw" && (
-                    <button
-                      onClick={() => setShowRejectModal(true)}
-                      className="w-full py-2 px-4 bg-[#ef4444]/20 text-[#ef4444] rounded-lg border border-[#ef4444]/50 hover:bg-[#ef4444]/30 transition-all font-medium"
-                    >
-                      ✗ Reject Request
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          {(["all", "pending", "approved", "rejected"] as const).map(s => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`px-4 py-2 rounded-lg text-xs font-bold capitalize transition-all border ${
+                statusFilter === s
+                  ? "bg-amber-500 text-black border-amber-500"
+                  : "bg-[#1a1a2e] text-gray-400 border-[#0f3460] hover:border-amber-500/40"
+              }`}
+            >
+              {s}
+            </button>
+          ))}
         </div>
 
-        {/* Reject Modal */}
-        {showRejectModal && selectedRequest && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="w-full max-w-md md:max-w-lg mx-auto rounded-2xl border border-[#0f3460] bg-gradient-to-br from-[#1a1a2e] to-[#16213e] p-6">
-              <h3 className="text-white font-bold text-lg mb-4">Reject Request</h3>
-              <p className="text-gray-400 text-sm mb-4">
-                Request ID: <span className="text-white">{selectedRequest.id}</span>
-              </p>
+        {/* Table + Detail Panel */}
+        <div className="grid grid-cols-3 gap-6">
 
-              <textarea
-                value={rejectReason}
-                onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="Enter rejection reason..."
-                className="w-full h-24 bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-[#e94560] mb-4"
-              />
-
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setShowRejectModal(false);
-                    setRejectReason("");
-                  }}
-                  className="flex-1 py-2 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleReject}
-                  disabled={loading}
-                  className="flex-1 py-2 px-4 bg-[#ef4444] text-white rounded-lg hover:bg-[#dc2626] transition-all font-medium disabled:opacity-50"
-                >
-                  Confirm Reject
-                </button>
-              </div>
+          {/* Table */}
+          <div className="col-span-2 bg-[#1a1a2e] rounded-xl border border-[#0f3460] overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-[#0f3460] border-b border-[#1a5f7a]">
+                    <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase tracking-wider">Type</th>
+                    <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase tracking-wider">UID</th>
+                    <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase tracking-wider">Phone</th>
+                    <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase tracking-wider">Amount</th>
+                    <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase tracking-wider">Method</th>
+                    <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase tracking-wider">Date</th>
+                    <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase tracking-wider">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr><td colSpan={7} className="text-center py-12 text-gray-500">Loading...</td></tr>
+                  ) : filtered.length === 0 ? (
+                    <tr><td colSpan={7} className="text-center py-12 text-gray-500">No requests found.</td></tr>
+                  ) : (
+                    filtered.map(req => (
+                      <tr
+                        key={req.id}
+                        onClick={() => setSelected(req)}
+                        className={`border-b border-[#0f3460]/60 cursor-pointer transition-all ${
+                          selected?.id === req.id ? "bg-[#0f3460]" : "hover:bg-[#0f3460]/50"
+                        }`}
+                      >
+                        {/* Type label */}
+                        <td className="py-3 px-4">
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                            req.is_agent ? "bg-blue-500/20 text-blue-300" : "bg-purple-500/20 text-purple-300"
+                          }`}>
+                            {req.request_type_label}
+                          </span>
+                        </td>
+                        {/* UID = invite_code */}
+                        <td className="py-3 px-4">
+                          <span className="text-amber-400 font-black font-mono text-sm">
+                            {req.invite_code}
+                          </span>
+                        </td>
+                        {/* Phone */}
+                        <td className="py-3 px-4 text-gray-300 text-xs font-mono">{req.phone}</td>
+                        {/* Amount */}
+                        <td className="py-3 px-4 text-amber-400 font-black">Rs {req.amount.toLocaleString()}</td>
+                        {/* Method */}
+                        <td className="py-3 px-4 text-gray-300 text-xs">{req.method}</td>
+                        {/* Date */}
+                        <td className="py-3 px-4 text-gray-500 text-xs">{new Date(req.created_at).toLocaleString()}</td>
+                        {/* Status */}
+                        <td className="py-3 px-4">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1 ${STATUS_STYLE[req.status] || ""}`}>
+                            {req.status === "pending"   && <Clock className="w-3 h-3" />}
+                            {(req.status === "approved" || req.status === "completed") && <Check className="w-3 h-3" />}
+                            {req.status === "rejected"  && <X className="w-3 h-3" />}
+                            {req.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
-        )}
+
+          {/* Detail Panel */}
+          <div className="bg-[#1a1a2e] rounded-xl border border-[#0f3460] p-5 h-fit">
+            {selected ? (
+              <>
+                <h3 className="text-white font-black text-base mb-5 uppercase tracking-wider">Request Details</h3>
+
+                <div className="space-y-3 mb-5 text-sm">
+
+                  {/* Type badge */}
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Request Type</span>
+                    <span className={`text-xs font-black px-2 py-0.5 rounded-full ${
+                      selected.is_agent ? "bg-blue-500/20 text-blue-300" : "bg-purple-500/20 text-purple-300"
+                    }`}>
+                      {selected.request_type_label}
+                    </span>
+                  </div>
+
+                  {/* UID */}
+                  <div className="bg-[#0f3460] rounded-lg p-3">
+                    <p className="text-gray-400 text-xs mb-1">UID (Invite Code)</p>
+                    <p className="text-amber-400 font-black text-2xl font-mono tracking-widest">{selected.invite_code}</p>
+                  </div>
+
+                  {/* Phone */}
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Phone</span>
+                    <span className="text-white font-mono">+92{selected.phone}</span>
+                  </div>
+
+                  {/* User UUID */}
+                  <div>
+                    <p className="text-gray-400 text-xs mb-0.5">User ID</p>
+                    <p className="text-gray-500 font-mono text-[10px] break-all">{selected.userId}</p>
+                  </div>
+
+                  {/* Amount */}
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Amount</span>
+                    <span className="text-amber-400 font-black text-lg">Rs {selected.amount.toLocaleString()}</span>
+                  </div>
+
+                  {/* Method */}
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Method</span>
+                    <span className="text-white font-bold">{selected.method}</span>
+                  </div>
+
+                  {/* Account Name */}
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Account Name</span>
+                    <span className="text-white">{selected.account_name}</span>
+                  </div>
+
+                  {/* Account Number */}
+                  <div className="bg-[#0f3460] rounded-lg p-3">
+                    <p className="text-gray-400 text-xs mb-1">Account Number</p>
+                    <p className="text-white font-mono font-bold">{selected.account_number}</p>
+                  </div>
+
+                  {/* Date */}
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Requested</span>
+                    <span className="text-gray-300 text-xs">{new Date(selected.created_at).toLocaleString()}</span>
+                  </div>
+
+                  {/* Status */}
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400">Status</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${STATUS_STYLE[selected.status]}`}>
+                      {selected.status}
+                    </span>
+                  </div>
+
+                  {/* Rejection reason */}
+                  {selected.status === "rejected" && selected.reason && (
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                      <p className="text-red-400 text-xs font-bold mb-1">Rejection Reason</p>
+                      <p className="text-gray-300 text-xs">{selected.reason}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Action buttons — only for pending */}
+                {selected.status === "pending" && (
+                  <div className="space-y-2">
+                    <button
+                      onClick={handleApprove}
+                      disabled={actionLoading}
+                      className="w-full py-2.5 bg-gradient-to-r from-emerald-500 to-green-500 text-white font-black rounded-lg hover:brightness-110 transition-all disabled:opacity-50 text-sm"
+                    >
+                      {actionLoading ? "Processing..." : selected.type === "withdraw"
+                        ? (selected.is_agent ? "✓ Release Agent Salary" : "✓ Approve Withdrawal")
+                        : "✓ Approve Deposit"}
+                    </button>
+                    <button
+                      onClick={() => setShowRejectModal(true)}
+                      disabled={actionLoading}
+                      className="w-full py-2.5 bg-red-500/20 text-red-400 border border-red-500/40 font-black rounded-lg hover:bg-red-500/30 transition-all text-sm"
+                    >
+                      ✗ Reject
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-600">
+                <Clock className="w-10 h-10 mb-3 opacity-30" />
+                <p className="text-sm">Select a request to view details</p>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Reject Modal */}
+      {showRejectModal && selected && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="w-full max-w-md bg-[#1a1a2e] border border-[#0f3460] rounded-2xl p-6">
+            <h3 className="text-white font-bold text-lg mb-1">Reject Request</h3>
+            <p className="text-gray-400 text-sm mb-4">
+              UID: <span className="text-amber-400 font-black">{selected.invite_code}</span>
+              {" · "}Amount: <span className="text-amber-400 font-black">Rs {selected.amount.toLocaleString()}</span>
+            </p>
+            {selected.type === "withdraw" && (
+              <p className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-2 mb-4">
+                Rs {selected.amount.toLocaleString()} will be refunded to user's main balance.
+              </p>
+            )}
+            <textarea
+              value={rejectReason}
+              onChange={e => setRejectReason(e.target.value)}
+              placeholder="Enter rejection reason..."
+              className="w-full h-24 bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-red-500 mb-4 text-sm resize-none"
+            />
+            {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowRejectModal(false); setRejectReason(""); setError(""); }}
+                className="flex-1 py-2 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-red-500 transition-all text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={actionLoading}
+                className="flex-1 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all font-bold text-sm disabled:opacity-50"
+              >
+                {actionLoading ? "Rejecting..." : "Confirm Reject"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

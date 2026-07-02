@@ -31,6 +31,7 @@ interface UserContextType {
   addWageringProgress: (amount: number) => void;
   addDepositWithBonus: (deposit: number, bonus: number) => void;
   referralCode: string;
+  setReferralCode: (code: string) => void;
   referralCount: number;
   totalCommissions: number;
   setTotalCommissions: (amount: number) => void;
@@ -49,9 +50,9 @@ interface UserContextType {
   login: (
     phoneNumber: string,
     userId?: string,
-    profile?: { referral_code?: string; phone_number?: string },
+    profile?: { referral_code?: string; phone_number?: string; vip_level?: number; wagered_amount?: number },
     wallet?: { main_balance?: number; wagering_required?: number }
-  ) => void;
+  ) => Promise<void>;
   logout: () => void;
   selectedPaymentMethod: 'jazzcash' | 'easypaisa';
   setSelectedPaymentMethod: (method: 'jazzcash' | 'easypaisa') => void;
@@ -96,12 +97,15 @@ export type PaymentMethod = keyof typeof PAYMENT_LIMITS;
 
 export function formatDisplayUid(uid: string): string {
   if (!uid) return '------';
-  return uid.replace(/-/g, '').slice(0, 6);
+  // Show first 6 chars of UUID (without dashes) as a short display ID
+  return uid.replace(/-/g, '').slice(0, 8).toUpperCase();
 }
 
 export type ProfileRow = {
+  invite_code?: string | null;
+  phone_number?: string | null;
   vip_level?: number | null;
-  wagered_amount?: number | null;
+  total_bets?: number | null;
 };
 
 export function computeVipProgress(vipLevel: number, wageredAmount: number): number {
@@ -174,8 +178,15 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [musicEnabled, setMusicEnabled] = useState(savedSession?.musicEnabled ?? true);
   const [wageringRequired, setWageringRequired] = useState(savedSession?.wageringRequired ?? 0);
   const [wageringCompleted, setWageringCompleted] = useState(savedSession?.wageringCompleted ?? 0);
-  const [referralCode, setReferralCode] = useState(savedSession?.referralCode || '');
+  const [referralCode, setReferralCodeState] = useState(savedSession?.referralCode || '');
   const [referralCount, setReferralCount] = useState(savedSession?.referralCount ?? 0);
+
+  const setReferralCode = useCallback((code: string) => {
+    setReferralCodeState(code);
+    if (typeof window !== 'undefined' && code) {
+      localStorage.setItem('winwave_referral_code', code);
+    }
+  }, []);
   const [totalCommissions, setTotalCommissions] = useState(savedSession?.totalCommissions ?? 0);
   const [claimedDailyBonus, setClaimedDailyBonus] = useState(savedSession?.claimedDailyBonus ?? false);
   const [dailyWagerProgress, setDailyWagerProgress] = useState(savedSession?.dailyWagerProgress ?? 0);
@@ -273,21 +284,21 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const login = async (
     phoneNumberValue: string,
     userId?: string,
-    profile?: { referral_code?: string; phone_number?: string; vip_level?: number; progress?: number; wagered_amount?: number },
-    wallet?: { main_balance?: number; wagering_required?: number }
+    profile?: { invite_code?: string; phone_number?: string; vip_level?: number; total_bets?: number },
+    wallet?: { main_balance?: number; game_balance?: number }
   ) => {
     const suffix = phoneNumberValue.substring(Math.max(0, phoneNumberValue.length - 4));
     setUid(userId || '');
     setPhoneNumber(profile?.phone_number || phoneNumberValue);
     setUsername(`MEMBER_${suffix}`);
-    if (profile?.referral_code) {
-      setReferralCode(profile.referral_code);
+    if (profile?.invite_code) {
+      setReferralCode(profile.invite_code);
     }
     if (wallet?.main_balance !== undefined) {
       setMainWalletBalanceState(wallet.main_balance);
     }
-    if (wallet?.wagering_required !== undefined) {
-      setWageringRequired(wallet.wagering_required);
+    if (wallet?.game_balance !== undefined) {
+      setThirdPartyWalletBalanceState(wallet.game_balance);
     }
     setLastLogin(new Date().toISOString());
     setIsLoggedIn(true);
@@ -295,24 +306,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     // Apply demo mode if applicable
     applyDemoMode(profile?.phone_number || phoneNumberValue);
 
-    // Fetch and apply profile data (VIP status, wagered amount)
-    if (userId) {
-      try {
-        const { data, error } = await supabase
-          .from('users')
-          .select('vip_level, wagered_amount')
-          .eq('id', userId)
-          .maybeSingle();
-
-        if (error) {
-          console.error('Failed to fetch profile data on login:', error);
-        } else if (data) {
-          applyProfileData(data);
-        }
-      } catch (err) {
-        console.error('Error fetching profile data on login:', err);
-      }
-    }
+    // Fetch and apply full profile/wallet data after login
+    void refreshUserData(userId);
   };
 
   const logout = () => {
@@ -338,41 +333,24 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   };
 
   const applyProfileData = useCallback((profile: ProfileRow) => {
-    const level = profile.vip_level;
-    const wagered = profile.wagered_amount;
+    const level   = profile.vip_level;
+    const wagered = profile.total_bets;   // total_bets is the real column
 
-    if (level != null) {
-      setVipLevelState(level);
-    }
+    if (level != null)   setVipLevelState(level);
     if (wagered != null) {
       setCumulativeWagerState(wagered);
-      localStorage.setItem("cumulative_wager", wagered.toString());
+      localStorage.setItem('cumulative_wager', wagered.toString());
     }
 
-    // progress column doesn't exist in users table - compute from wagered_amount
-    if (wagered != null && level != null) {
-      setVipProgressState(computeVipProgress(level, wagered));
-      return;
-    }
-
-    if (wagered != null) {
-      setVipLevelState((currentLevel) => {
-        setVipProgressState(computeVipProgress(currentLevel, wagered));
-        return currentLevel;
-      });
-      return;
-    }
-
-    if (level != null) {
-      setCumulativeWagerState((currentWager) => {
-        setVipProgressState(computeVipProgress(level, currentWager));
-        return currentWager;
-      });
+    const resolvedLevel   = level   ?? undefined;
+    const resolvedWagered = wagered ?? undefined;
+    if (resolvedLevel != null && resolvedWagered != null) {
+      setVipProgressState(computeVipProgress(resolvedLevel, resolvedWagered));
     }
   }, []);
 
-  const refreshUserData = useCallback(async () => {
-    let userId = uid;
+  const refreshUserData = useCallback(async (providedUserId?: string) => {
+    let userId = providedUserId || uid;
     if (!userId) {
       const { data: { session } } = await supabase.auth.getSession();
       userId = session?.user?.id ?? '';
@@ -380,42 +358,32 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
     if (!userId) return;
 
+    // Single query to public.users — balances live here, no separate wallets table
     const { data, error } = await supabase
       .from('users')
-      .select('vip_level, wagered_amount')
+      .select('invite_code, phone_number, vip_level, total_bets, main_balance, game_balance, wagering_required, wagering_completed')
       .eq('id', userId)
       .maybeSingle();
 
     if (error) {
       console.error('Failed to refresh profile data:', error);
-      return;
-    }
-
-    if (data) {
+    } else if (data) {
+      if (data.invite_code)  setReferralCode(data.invite_code);
+      if (data.phone_number) setPhoneNumber(data.phone_number);
+      if (data.main_balance  != null) setMainWalletBalanceState(data.main_balance);
+      if (data.game_balance  != null) setThirdPartyWalletBalanceState(data.game_balance);
+      if (data.wagering_required  != null) setWageringRequired(data.wagering_required);
+      if (data.wagering_completed != null) setWageringCompleted(data.wagering_completed);
       applyProfileData(data);
     }
 
-    // Fetch wallet balance
-    const { data: walletData, error: walletError } = await supabase
-      .from('wallets')
-      .select('main_balance')
-      .eq('user_id', userId)
-      .maybeSingle();
+    // Fetch referral count (users whose referred_by = this user's id)
+    const { count: refCount } = await supabase
+      .from('users')
+      .select('id', { count: 'exact', head: true })
+      .eq('referred_by', userId);
+    if (refCount != null) setReferralCount(refCount);
 
-    if (!walletError && walletData) {
-      setMainWalletBalanceState(walletData.main_balance || 0);
-    }
-
-    // Calculate yesterday's commission from betting_history table
-    try {
-      const { fetchYesterdayCommission } = await import('../lib/database');
-      const { total, error: commissionError } = await fetchYesterdayCommission(userId);
-      if (!commissionError) {
-        setTotalCommissions(total);
-      }
-    } catch (err) {
-      console.error('Error calculating yesterday\'s commission:', err);
-    }
   }, [uid, applyProfileData]);
 
   // Persist withdrawal_pin to public.users whenever it changes
@@ -489,12 +457,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
 
     const session = {
+      uid,
       phoneNumber,
       username,
       avatar,
       balance: totalBalance,
       mainWalletBalance,
       thirdPartyWalletBalance,
+      referralCode,
       soundEnabled,
       musicEnabled,
       wageringRequired,
@@ -585,6 +555,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       totalBalance,
       transferWallet,
       setThirdPartyWalletBalance,
+      setReferralCode,
+      referralCode,
       soundEnabled, setSoundEnabled,
       musicEnabled, setMusicEnabled,
       wageringRequired, setWageringRequired,

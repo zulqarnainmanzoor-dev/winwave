@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Search, TrendingUp, TrendingDown, Lock, ExternalLink } from "lucide-react";
+import { supabase } from "../../lib/supabaseClient";
 
 interface Member {
+  id: string;
   uid: string;
   phone: string;
   email: string;
@@ -17,54 +19,6 @@ interface Member {
   status: "active" | "suspended" | "banned";
 }
 
-const MOCK_MEMBERS: Member[] = [
-  {
-    uid: "UID#100234",
-    phone: "03001234567",
-    email: "user1@email.com",
-    username: "Player_Alpha",
-    joined: "2026-05-15",
-    deposits: 125000,
-    withdrawals: 89000,
-    balance: 36000,
-    winLoss: 15000,
-    lastActive: "2026-06-29 14:30",
-    ipAddresses: ["192.168.1.1", "192.168.1.5"],
-    deviceIds: ["DEV#ABC123", "DEV#XYZ789"],
-    status: "active",
-  },
-  {
-    uid: "UID#100235",
-    phone: "03009876543",
-    email: "user2@email.com",
-    username: "Player_Beta",
-    joined: "2026-04-10",
-    deposits: 250000,
-    withdrawals: 180000,
-    balance: 70000,
-    winLoss: -45000,
-    lastActive: "2026-06-28 22:15",
-    ipAddresses: ["192.168.2.10"],
-    deviceIds: ["DEV#DEF456"],
-    status: "active",
-  },
-  {
-    uid: "UID#100236",
-    phone: "03105555555",
-    email: "user3@email.com",
-    username: "Player_Gamma",
-    joined: "2026-03-22",
-    deposits: 500000,
-    withdrawals: 520000,
-    balance: 15000,
-    winLoss: -35000,
-    lastActive: "2026-06-25 10:45",
-    ipAddresses: ["192.168.3.20", "192.168.3.21", "192.168.3.22"],
-    deviceIds: ["DEV#GHI789", "DEV#JKL012"],
-    status: "suspended",
-  },
-];
-
 export function MemberManagement() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchType, setSearchType] = useState<"uid" | "phone" | "email">("uid");
@@ -72,14 +26,104 @@ export function MemberManagement() {
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false);
   const [adjustmentType, setAdjustmentType] = useState<"add" | "deduct">("add");
   const [adjustmentAmount, setAdjustmentAmount] = useState("");
+  const [members, setMembers] = useState<Member[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [updating, setUpdating] = useState(false);
 
-  const filteredMembers = MOCK_MEMBERS.filter((member) => {
+  useEffect(() => {
+    const fetchMembers = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const { data: users, error: usersError } = await supabase
+          .from('users')
+          .select('id, phone_number, invite_code, created_at, vip_level, is_agent, main_balance, game_balance')
+          .order('created_at', { ascending: false })
+          .limit(100);
+
+        if (usersError) throw usersError;
+
+        const mapped = (users || []).map((row: any) => ({
+          id: row.id,
+          uid: row.invite_code || row.id.replace(/-/g,'').slice(0,6).toUpperCase(),
+          phone: row.phone_number || '',
+          email: `${row.phone_number || 'member'}@winwave.com`,
+          username: `MEMBER_${(row.phone_number || '').slice(-4) || row.invite_code || '----'}`,
+          joined: row.created_at || '',
+          deposits: 0,
+          withdrawals: 0,
+          balance: Number(row.main_balance ?? 0),
+          winLoss: 0,
+          lastActive: row.created_at || '',
+          ipAddresses: [],
+          deviceIds: [],
+          status: 'active' as const,
+        }));
+
+        setMembers(mapped);
+      } catch (err: any) {
+        console.error('Failed to load member data', err);
+        setError(err?.message || 'Unable to load members from Supabase.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void fetchMembers();
+  }, []);
+
+  const filteredMembers = members.filter((member) => {
     if (!searchQuery) return true;
     if (searchType === "uid") return member.uid.toLowerCase().includes(searchQuery.toLowerCase());
     if (searchType === "phone") return member.phone.includes(searchQuery);
     if (searchType === "email") return member.email.toLowerCase().includes(searchQuery.toLowerCase());
     return true;
   });
+
+  const handleAdjustBalance = async () => {
+    if (!selectedMember) return;
+    const amount = Number(adjustmentAmount);
+    if (!amount || Number.isNaN(amount)) {
+      setError('Please enter a valid amount.');
+      return;
+    }
+
+    setUpdating(true);
+    setError('');
+    try {
+      const nextBalance = adjustmentType === 'add' ? selectedMember.balance + amount : Math.max(0, selectedMember.balance - amount);
+      const { error: updateError } = await supabase.from('users').update({ main_balance: nextBalance }).eq('id', selectedMember.id);
+      if (updateError) throw updateError;
+
+      setMembers((prev) => prev.map((member) => member.id === selectedMember.id ? { ...member, balance: nextBalance } : member));
+      setSelectedMember((prev) => prev ? { ...prev, balance: nextBalance } : prev);
+      setShowAdjustmentModal(false);
+      setAdjustmentAmount('');
+    } catch (err: any) {
+      console.error('Balance update failed', err);
+      setError(err?.message || 'Failed to update balance.');
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const handleMemberStateChange = async (nextStatus: "suspended" | "banned") => {
+    if (!selectedMember) return;
+    setUpdating(true);
+    setError('');
+    try {
+      const { error: updateError } = await supabase.from('users').update({ status: nextStatus }).eq('id', selectedMember.id);
+      if (updateError) throw updateError;
+      setMembers((prev) => prev.map((member) => member.id === selectedMember.id ? { ...member, status: nextStatus } : member));
+      setSelectedMember((prev) => prev ? { ...prev, status: nextStatus } : prev);
+    } catch (err: any) {
+      console.error('Member state update failed', err);
+      setError(err?.message || 'Unable to update account state.');
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   return (
     <div className="flex-1 overflow-auto">
@@ -137,8 +181,11 @@ export function MemberManagement() {
                   Members Found: <span className="text-[#e94560]">{filteredMembers.length}</span>
                 </h3>
               </div>
+              {error && <div className="mx-6 mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
               <div className="divide-y divide-[#0f3460]">
-                {filteredMembers.map((member) => (
+                {loading ? (
+                  <div className="p-6 text-sm text-gray-500">Loading live member rows...</div>
+                ) : filteredMembers.map((member) => (
                   <div
                     key={member.uid}
                     onClick={() => setSelectedMember(member)}
@@ -256,11 +303,19 @@ export function MemberManagement() {
                 >
                   Adjust Balance
                 </button>
-                <button className="w-full py-2 px-4 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all font-medium text-sm">
-                  View Full Profile
+                <button
+                  onClick={() => void handleMemberStateChange('suspended')}
+                  disabled={updating}
+                  className="w-full py-2 px-4 bg-[#ef4444]/20 text-[#ef4444] rounded-lg border border-[#ef4444]/50 hover:bg-[#ef4444]/30 transition-all font-medium text-sm"
+                >
+                  {updating ? 'Updating...' : 'Suspend Account'}
                 </button>
-                <button className="w-full py-2 px-4 bg-[#ef4444]/20 text-[#ef4444] rounded-lg border border-[#ef4444]/50 hover:bg-[#ef4444]/30 transition-all font-medium text-sm">
-                  Suspend Account
+                <button
+                  onClick={() => void handleMemberStateChange('banned')}
+                  disabled={updating}
+                  className="w-full py-2 px-4 bg-[#ef4444]/30 text-[#fda4af] rounded-lg border border-[#ef4444]/50 hover:bg-[#ef4444]/40 transition-all font-medium text-sm"
+                >
+                  {updating ? 'Updating...' : 'Ban Account'}
                 </button>
               </div>
             </div>
@@ -312,8 +367,12 @@ export function MemberManagement() {
                 >
                   Cancel
                 </button>
-                <button className="flex-1 py-2 px-4 bg-gradient-to-r from-[#4ade80] to-[#22c55e] text-white rounded-lg hover:shadow-lg transition-all font-medium">
-                  Confirm
+                <button
+                  onClick={handleAdjustBalance}
+                  disabled={updating}
+                  className="flex-1 py-2 px-4 bg-gradient-to-r from-[#4ade80] to-[#22c55e] text-white rounded-lg hover:shadow-lg transition-all font-medium"
+                >
+                  {updating ? 'Updating...' : 'Confirm'}
                 </button>
               </div>
             </div>

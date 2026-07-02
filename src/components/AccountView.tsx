@@ -22,7 +22,7 @@ import {
   Check
 } from "lucide-react";
 import { useLanguage } from "../context/LanguageContext";
-import { formatDisplayUid, useUser } from "../context/UserContext";
+import { useUser } from "../context/UserContext";
 
 export default function AccountView({
   onTransactionClick,
@@ -44,6 +44,7 @@ export default function AccountView({
     username,
     avatar,
     uid,
+    referralCode,
     lastLogin,
     totalBalance,
     mainWalletBalance,
@@ -60,16 +61,18 @@ export default function AccountView({
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [copiedUid, setCopiedUid] = useState(false);
 
-  const displayUid = formatDisplayUid(uid);
+  // Show invite_code (6-digit number) as UID — fall back to first 6 digits of UUID
+  const displayUid = referralCode || uid.replace(/-/g, '').replace(/[a-f]/gi, '').slice(0, 6) || uid.replace(/-/g, '').slice(0, 6).toUpperCase();
 
   const handleCopyUid = async () => {
-    if (!uid) return;
+    // Copy only the 6-digit invite code, not the full UUID
+    const codeToCopy = referralCode || uid;
     try {
-      await navigator.clipboard.writeText(uid);
+      await navigator.clipboard.writeText(codeToCopy);
       setCopiedUid(true);
       setTimeout(() => setCopiedUid(false), 2000);
     } catch {
-      alert("UID copied!");
+      alert('Copied: ' + codeToCopy);
     }
   };
 
@@ -191,6 +194,7 @@ export default function AccountView({
           iconBg="bg-blue-500/10 border-blue-500/20"
           title={t("gameHistory")}
           subtitle={t("myGameHistory")}
+          onClick={onStatisticsClick}
         />
         <MenuGridCard
           icon={<ArrowLeftRight className="w-5 h-5 text-emerald-400" />}

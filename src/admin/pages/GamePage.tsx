@@ -76,13 +76,13 @@ export function GamePage({ gameType, gameTitle, gameDescription }: GamePageProps
     fetchRecentRounds();
 
     const channel = supabase
-      .channel(`game-rounds-${gameType}`)
+      .channel(`game-records-${gameType}`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
-          table: "game_rounds",
+          table: "game_records",
           filter: `game_type=eq.${gameType}`,
         },
         (payload) => {
@@ -96,7 +96,7 @@ export function GamePage({ gameType, gameTitle, gameDescription }: GamePageProps
         {
           event: "UPDATE",
           schema: "public",
-          table: "game_rounds",
+          table: "game_records",
           filter: `game_type=eq.${gameType}`,
         },
         (payload) => {

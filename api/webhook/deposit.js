@@ -20,54 +20,86 @@ function verifySignature(payload, signature) {
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
+
   try {
     const raw = JSON.stringify(req.body || {});
     const signature = req.headers['x-pkpay-signature'] || req.headers['x-signature'] || req.headers['signature'];
+
     if (!verifySignature(raw, String(signature || ''))) {
       console.error('Webhook signature invalid');
       return res.status(401).json({ ok: false, error: 'Invalid signature' });
     }
 
     const payload = req.body || {};
-    const successStatuses = ['success','completed','1','paid','approved'];
-    if (!payload || !payload.user_id || !payload.amount) return res.status(400).json({ ok: false, error: 'Missing fields' });
+    const successStatuses = ['success', 'completed', '1', 'paid', 'approved'];
+
+    if (!payload.user_id || !payload.amount) {
+      return res.status(400).json({ ok: false, error: 'Missing user_id or amount' });
+    }
+
     if (!successStatuses.includes((payload.status || '').toLowerCase())) {
       return res.status(200).send('ORDER_NOT_SUCCESSFUL');
     }
 
     const userId = payload.user_id;
     const amount = parseFloat(payload.amount);
-    if (isNaN(amount) || amount <= 0) return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ ok: false, error: 'Invalid amount' });
+    }
 
-    const bonus = amount * 0.02;
+    const bonus = parseFloat((amount * 0.02).toFixed(2));
     const totalCredited = amount + bonus;
-    // wagering requirement based on total credited amount (multiplier 1)
-    const wagering = totalCredited * 1;
+    // Wagering = deposit + 2% bonus (user must bet this much before withdrawing)
+    const newWageringRequired = totalCredited;
 
-    // Use RPC to increment balances (function created in migrations)
-    const { data, error } = await supabase.rpc('increment_user_deposit', {
-      p_user_id: userId,
-      p_amount: amount,
-      p_bonus: bonus,
-      p_wagering: wagering,
+    // 1. Fetch current user balances
+    const { data: user, error: fetchErr } = await supabase
+      .from('users')
+      .select('main_balance, wagering_required')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (fetchErr || !user) {
+      console.error('User fetch failed:', fetchErr);
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    const currentBalance = parseFloat(user.main_balance ?? 0);
+    const currentWagering = parseFloat(user.wagering_required ?? 0);
+
+    // 2. Update main_balance and wagering_required
+    const { error: updateErr } = await supabase
+      .from('users')
+      .update({
+        main_balance: parseFloat((currentBalance + totalCredited).toFixed(2)),
+        wagering_required: parseFloat((currentWagering + newWageringRequired).toFixed(2)),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', userId);
+
+    if (updateErr) {
+      console.error('Balance update failed:', updateErr);
+      return res.status(500).json({ ok: false, error: 'Failed to update balance' });
+    }
+
+    // 3. Log transaction as completed
+    const { error: txErr } = await supabase.from('transactions').insert({
+      user_id: userId,
+      type: 'deposit',
+      amount,
+      bonus,
+      status: 'completed',
+      gateway_ref: payload.order_id || null,
+      created_at: new Date().toISOString(),
     });
 
-    if (error) {
-      console.error('RPC increment_user_deposit failed:', error);
-      return res.status(500).json({ ok: false, error: 'Failed to update user balance' });
-    }
+    if (txErr) console.warn('Transaction log failed (non-fatal):', txErr.message);
 
-    // Log transaction
-    try {
-      await supabase.from('transactions').insert({ user_id: userId, type: 'deposit', amount, bonus, status: 'completed', gateway_ref: payload.order_id || null, created_at: new Date().toISOString() });
-    } catch (e) {
-      console.warn('Failed to log transaction:', e.message || e);
-    }
+    console.log(`✅ Deposit credited: user=${userId} amount=${amount} bonus=${bonus} wagering_added=${newWageringRequired}`);
+    return res.status(200).send('SUCCESS');
 
-    // Respond with success so gateway can redirect user
-    res.status(200).send('SUCCESS');
   } catch (err) {
     console.error('Webhook handler error:', err);
-    res.status(500).json({ ok: false, error: 'Internal Server Error' });
+    return res.status(500).json({ ok: false, error: 'Internal Server Error' });
   }
 };

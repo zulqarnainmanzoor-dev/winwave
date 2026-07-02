@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { supabase, isServiceRoleKey } from '../database/db';
+import { supabaseAdmin, isServiceRoleKey } from '../database/db';
 import {
   getDeviceContext,
   logSecurityEvent,
@@ -27,7 +27,7 @@ const normalizePhone = (phone: string) => (phone || '').replace(/\D/g, '');
 // It logs registration attempts but does not block repeated device/IP attempts.
 const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuardResult> => {
   // 1) Hard phone uniqueness using the public.users table (target table per requirements)
-  const { data: existingUsers, error: existingUsersErr } = await supabase
+  const { data: existingUsers, error: existingUsersErr } = await supabaseAdmin
     .from('users')
     .select('id')
     .eq('phone_number', phone)
@@ -40,7 +40,7 @@ const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuard
 
   // 2) Log IP+phone registration attempts for manual review.
   try {
-    await supabase.from('registration_attempts').insert({ ip, phone_number: phone });
+    await supabaseAdmin.from('registration_attempts').insert({ ip, phone_number: phone });
   } catch {
     // ignore logging failures; do not block registration
   }
@@ -62,41 +62,35 @@ const isValidInvitationCodeFormat = (raw: string) => {
 };
 
 /**
- * Generate a unique 6-digit numeric referral code (e.g., 101814)
- * Ensures no collision with existing codes in public.users
+ * Generate a unique alphanumeric invite/referral code and fall back safely if the
+ * database query itself fails or the schema rejects the lookup.
  */
-const generateReferralCode = async (): Promise<string> => {
-  let code: string;
-  let attempts = 0;
-  do {
-    // Generate random 6-digit number between 100000 and 999999
-    code = (100000 + Math.floor(Math.random() * 900000)).toString();
-    attempts++;
-    
-    // Check if code already exists in public.users
-    const { data, error } = await supabase
-      .from('users')
-      .select('id')
-      .eq('referral_code', code)
-      .limit(1);
-      
-    if (error) {
-      console.error('Error checking referral code uniqueness:', error);
-      // If error, just use this code anyway
-      return code;
+const generateInviteCode = async (): Promise<string> => {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('referral_code', candidate)
+        .limit(1);
+
+      if (error) {
+        console.warn('Invite code uniqueness lookup failed, using fallback code', { candidate, error });
+        return candidate;
+      }
+
+      if (!data || data.length === 0) {
+        return candidate;
+      }
+    } catch (lookupError: any) {
+      console.warn('Invite code lookup threw, using fallback code', { candidate, error: lookupError?.message });
+      return candidate;
     }
-    
-    if (!data || data.length === 0) {
-      // Code is unique
-      return code;
-    }
-    
-    // If we've tried too many times, just use the current code
-    if (attempts > 20) {
-      console.warn('Could not find unique referral code after 20 attempts, using:', code);
-      return code;
-    }
-  } while (true);
+  }
+
+  return `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 };
 
 router.post('/register', async (req, res) => {
@@ -137,10 +131,10 @@ router.post('/register', async (req, res) => {
 
       if (referralMatch) {
         // Try matching as WWxxxxxx format in public.users
-        ({ data: referrer, error: refErr } = await supabase
+        ({ data: referrer, error: refErr } = await supabaseAdmin
           .from('users')
-          .select('id, referral_code')
-          .eq('referral_code', normalizedInvitationCode)
+          .select('id, referral_code, invite_code')
+          .or(`referral_code.eq.${normalizedInvitationCode},invite_code.eq.${normalizedInvitationCode}`)
           .maybeSingle());
           
         console.log('🔍 REFERRAL DEBUG - WW format lookup result:', { referrer, refErr });
@@ -150,7 +144,7 @@ router.post('/register', async (req, res) => {
         console.log('🔍 REFERRAL DEBUG - Numeric code detected, looking up referral_code:', baseCode);
         
         // First try exact match
-        ({ data: referrer, error: refErr } = await supabase
+        ({ data: referrer, error: refErr } = await supabaseAdmin
           .from('users')
           .select('id, referral_code')
           .eq('referral_code', baseCode)
@@ -161,7 +155,7 @@ router.post('/register', async (req, res) => {
         // If not found, try with WW prefix
         if (!referrer && !refErr) {
           console.log('🔍 REFERRAL DEBUG - Trying WW prefix lookup for:', `WW${baseCode}`);
-          ({ data: referrer, error: refErr } = await supabase
+          ({ data: referrer, error: refErr } = await supabaseAdmin
             .from('users')
             .select('id, referral_code')
             .eq('referral_code', `WW${baseCode}`)
@@ -173,7 +167,7 @@ router.post('/register', async (req, res) => {
         // If still not found, try phone_number
         if (!referrer && !refErr) {
           console.log('🔍 REFERRAL DEBUG - Trying phone_number lookup for:', normalizedInvitationCode);
-          ({ data: referrer, error: refErr } = await supabase
+          ({ data: referrer, error: refErr } = await supabaseAdmin
             .from('users')
             .select('id, referral_code')
             .eq('phone_number', normalizedInvitationCode)
@@ -183,7 +177,7 @@ router.post('/register', async (req, res) => {
         }
       } else {
         // Fallback: exact match on referral_code
-        ({ data: referrer, error: refErr } = await supabase
+        ({ data: referrer, error: refErr } = await supabaseAdmin
           .from('users')
           .select('id, referral_code')
           .eq('referral_code', normalizedInvitationCode)
@@ -220,13 +214,13 @@ router.post('/register', async (req, res) => {
     let authError: any;
 
     if (serviceRoleAvailable) {
-      ({ data: authData, error: authError } = await supabase.auth.admin.createUser({
+      ({ data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
         email: userEmail,
         password,
         user_metadata: { phone: cleanPhone }
       } as any));
     } else {
-      ({ data: authData, error: authError } = await supabase.auth.signUp({
+      ({ data: authData, error: authError } = await supabaseAdmin.auth.signUp({
         email: userEmail,
         password,
         options: { data: { phone: cleanPhone } }
@@ -238,34 +232,70 @@ router.post('/register', async (req, res) => {
     const userId = authData?.user?.id || (authData as any)?.id;
     if (!userId) return res.status(500).json({ ok: false, error: 'Signup failed: No User ID' });
 
-    // 2. Generate unique 6-digit numeric referral code
-    const referral_code = await generateReferralCode();
-    console.log('📋 Generated 6-digit referral code for new user:', referral_code);
+    // 2. Generate a safe invite/referral code and bind it to the profile record
+    const referral_code = await generateInviteCode();
+    console.log('📋 Generated invite/referral code for new user:', referral_code);
 
-    // 3. Insert into public.users table (target table per requirements)
-    const { error: userInsertError } = await supabase.from('users').insert({
-      id: userId,
-      phone_number: cleanPhone,
-      referral_code: referral_code,
-      referred_by: referrerId,  // This maps the referrer's id from public.users
-      created_at: new Date().toISOString(),
-    });
+    // 3. Insert into public.users table with resilient fallbacks for schema drift
+    const userPayloads = [
+      {
+        id: userId,
+        phone_number: cleanPhone,
+        referral_code,
+        invite_code: referral_code,
+        referred_by: referrerId,
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: userId,
+        phone_number: cleanPhone,
+        referral_code,
+        created_at: new Date().toISOString(),
+      },
+      {
+        id: userId,
+        phone_number: cleanPhone,
+        created_at: new Date().toISOString(),
+      },
+    ];
 
-    if (userInsertError) {
-      console.error("❌ User Insert Error:", userInsertError);
-      return res.status(500).json({ ok: false, error: 'User record creation failed' });
+    let userInsertError: any = null;
+    for (const payload of userPayloads) {
+      const { error } = await supabaseAdmin.from('users').insert(payload as any);
+      if (!error) {
+        userInsertError = null;
+        break;
+      }
+      userInsertError = error;
     }
 
-    // 4. Create wallet record
-    const { error: walletError } = await supabase.from('wallets').insert({
-      user_id: userId,
-      main_balance: 0,
-      wagering_required: 0,
-    });
+    if (userInsertError) {
+      console.error('❌ User Insert Error:', {
+        message: userInsertError?.message,
+        details: userInsertError?.details,
+        hint: userInsertError?.hint,
+        code: userInsertError?.code,
+      });
+      return res.status(500).json({ ok: false, error: 'User record creation failed', details: userInsertError?.message || 'Unknown insert error' });
+    }
 
-    if (walletError) {
-      console.error("❌ Wallet Insert Error:", walletError);
-      return res.status(500).json({ ok: false, error: 'Wallet creation failed' });
+    // 4. Create wallet record with a safe fallback if the schema is stricter than expected
+    try {
+      const { error: walletError } = await supabaseAdmin.from('wallets').insert({
+        user_id: userId,
+        main_balance: 0,
+        game_balance: 0,
+      } as any);
+
+      if (walletError) {
+        console.warn('⚠️ Wallet insert warning:', {
+          message: walletError?.message,
+          details: walletError?.details,
+          code: walletError?.code,
+        });
+      }
+    } catch (walletErr: any) {
+      console.warn('⚠️ Wallet insert threw:', walletErr?.message || walletErr);
     }
 
     // Log successful registration

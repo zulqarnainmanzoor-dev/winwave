@@ -57,10 +57,10 @@ export default function WithdrawView({
   const activeWallet = boundAccounts[selectedPaymentMethod];
 
   const limits = PAYMENT_LIMITS;
-
   const currentLimits = limits[selectedPaymentMethod];
-  const wagerRequired = Math.max(0, wageringRequired - wageringCompleted);
-  const withdrawableAmount = wagerRequired > 0 ? 0 : mainWalletBalance;
+  // Wagering: user must bet (deposit + 2% bonus) before withdrawing
+  const wagerRemaining = Math.max(0, wageringRequired - wageringCompleted);
+  const withdrawableAmount = wagerRemaining > 0 ? 0 : mainWalletBalance;
 
   const handleNumpadKey = (num: string) => {
     if (numpadBuffer.length >= 6) return;
@@ -110,8 +110,8 @@ export default function WithdrawView({
   };
 
   const handleWithdrawClick = () => {
-    if (wagerRequired > 0) {
-      alert(`Wagering requirement is incomplete. You need to bet Rs ${wagerRequired.toFixed(2)} more before you can withdraw.`);
+    if (wagerRemaining > 0) {
+      alert(`Complete wagering first. Need to bet Rs ${wagerRemaining.toFixed(2)} more.`);
       return;
     }
 
@@ -174,7 +174,7 @@ export default function WithdrawView({
     }
     
     // Bind the account for the current selected method
-    setBoundAccounts((prev) => ({
+    setBoundAccounts((prev: Record<string, any>) => ({
       ...prev,
       [selectedPaymentMethod]: {
         name: newWalletName.trim(),
@@ -189,8 +189,8 @@ export default function WithdrawView({
   };
 
   const handleWithdraw = () => {
-    if (wagerRequired > 0) {
-      alert(`Wagering requirement is incomplete. You need to bet Rs ${wagerRequired.toFixed(2)} more before you can withdraw.`);
+    if (wagerRemaining > 0) {
+      alert(`Complete wagering first. Need to bet Rs ${wagerRemaining.toFixed(2)} more.`);
       return;
     }
 
@@ -233,31 +233,47 @@ export default function WithdrawView({
       return;
     }
 
-    // Process withdrawal: create withdraw_requests row and deduct balance locally
+    // Process withdrawal: deduct from DB first, then create request
     (async () => {
       try {
-        // Deduct main balance locally
-        setBalance(totalBalance - withdrawVal);
+        // 1. Deduct from DB atomically
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('main_balance')
+          .eq('id', uid)
+          .maybeSingle();
+
+        const currentBal = Number(userRow?.main_balance ?? 0);
+        if (withdrawVal > currentBal) {
+          alert('Insufficient balance.');
+          return;
+        }
+
+        const { error: deductErr } = await supabase
+          .from('users')
+          .update({ main_balance: parseFloat((currentBal - withdrawVal).toFixed(2)) })
+          .eq('id', uid);
+
+        if (deductErr) { alert('Failed to process withdrawal.'); return; }
+
         setWithdrawCounts((prev) => ({
           ...prev,
           [selectedPaymentMethod]: prev[selectedPaymentMethod] + 1,
         }));
 
+        // 2. Insert withdraw_request
         const requestId = `WD-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
-        const userId = (useUser as any) ? (undefined as any) : undefined;
-        const uid = (window as any)?.winwave_uid || undefined;
-
-        const { error: insertError } = await supabase.from('withdraw_requests').insert([{ id: requestId, user_id: uid || null, amount: withdrawVal, bank_name: selectedPaymentMethod.toUpperCase(), account_name: activeWallet?.name || null, account_number: activeWallet?.account || null, status: 'pending', created_at: new Date().toISOString(), reason: withdrawRemarks.trim() } as any]);
-        if (insertError) console.warn('Failed to write withdraw request to DB', insertError);
-
-        // Insert a transaction record representing the pending withdraw
-        try {
-          const txId = `TX-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
-          const { error: txError } = await supabase.from('transactions').insert([{ id: txId, user_id: (userId || uid || null), type: 'withdraw', amount: withdrawVal, status: 'pending', gateway_ref: withdrawRemarks.trim() } as any]);
-          if (txError) console.warn('Failed to insert transaction', txError);
-        } catch (e) {
-          console.warn(e);
-        }
+        await (supabase.from('withdraw_requests') as any).insert([{
+          id: requestId,
+          user_id: uid || null,
+          amount: withdrawVal,
+          bank_name: selectedPaymentMethod.toUpperCase(),
+          account_name: activeWallet?.name || null,
+          account_number: activeWallet?.account || null,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          reason: withdrawRemarks.trim(),
+        }]);
 
         setShowSuccessModal(true);
       } catch (e) {
@@ -317,12 +333,11 @@ export default function WithdrawView({
           </div>
         </div>
 
-        {/* Wager Required */}
-        {wagerRequired > 0 ? (
+        {wagerRemaining > 0 ? (
           <div className="bg-[#1C1C1E] border border-amber-500/20 rounded-xl p-4 text-xs space-y-2">
             <div className="flex justify-between font-bold text-gray-200">
-              <span>Wager Required to Withdraw</span>
-              <span className="text-amber-500">Rs {wagerRequired.toFixed(2)}</span>
+              <span>Need to Bet Before Withdraw</span>
+              <span className="text-amber-500">Rs {wagerRemaining.toFixed(2)}</span>
             </div>
             <div className="flex justify-between text-gray-500 text-[10px]">
               <span>Progress</span>
@@ -335,12 +350,12 @@ export default function WithdrawView({
               />
             </div>
             <p className="text-[10px] text-gray-500 leading-tight">
-              Only your bet amount counts toward wagering. Winnings do not reduce this requirement.
+              Deposit + 2% bonus = total wagering required. Complete bets to unlock withdrawal.
             </p>
           </div>
         ) : (
           <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-xs text-emerald-400">
-            <span className="font-bold">✓ Wagering requirement completed!</span> Your full main wallet balance is available for withdrawal.
+            <span className="font-bold">✓ Wagering complete!</span> Full main balance available for withdrawal.
           </div>
         )}
 
@@ -530,10 +545,12 @@ export default function WithdrawView({
 
         {/* Limits & Details */}
         <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm text-xs space-y-2.5 text-gray-600 font-medium">
-          <div className="flex justify-between">
-            <span>Withdrawal Limit per Request:</span>
-            <span className="font-bold text-white">Rs {currentLimits.max.toLocaleString()}.00</span>
-          </div>
+            <div className="flex justify-between">
+              <span>Wager Remaining:</span>
+              <span className={`font-bold ${wagerRemaining > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                {wagerRemaining > 0 ? `Rs ${wagerRemaining.toFixed(2)}` : '✓ Completed'}
+              </span>
+            </div>
           <div className="flex justify-between">
             <span>Remaining Withdrawal Limit:</span>
             <span className="font-bold text-amber-500">Rs {currentLimits.max.toLocaleString()}.00</span>
@@ -561,14 +578,14 @@ export default function WithdrawView({
         </div>
       </div>
 
-      {/* Action Button at Bottom */}
-      <div className="fixed inset-x-0 bottom-0 p-4 bg-gradient-to-t from-[#f5f8ff] to-[#f5f8ff]/80 backdrop-blur-sm z-30">
-        <div className="mx-auto w-full max-w-xs">
+      {/* Action Button — sits above BottomNav (68px) */}
+      <div className="fixed inset-x-0 bottom-[68px] px-4 pb-3 pt-2 bg-gradient-to-t from-[#f5f8ff] via-[#f5f8ff]/95 to-transparent z-30 pointer-events-none">
+        <div className="mx-auto w-full max-w-[450px] pointer-events-auto">
           <button
             onClick={handleWithdrawClick}
-            className="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold text-lg py-3.5 rounded-full shadow-lg shadow-orange-500/30 hover:brightness-110 transition-all cursor-pointer"
+            className="w-full bg-gradient-to-r from-orange-500 to-amber-500 text-white font-black text-base py-4 rounded-full shadow-lg shadow-orange-500/40 hover:brightness-110 active:scale-[0.98] transition-all cursor-pointer tracking-wide"
           >
-            Withdraw
+            Withdraw Now
           </button>
         </div>
       </div>
@@ -610,7 +627,7 @@ export default function WithdrawView({
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 03331234567"
+                    placeholder="e.g. 03xxxxxxxxx"
                     value={newWalletAccount}
                     onChange={(e) => setNewWalletAccount(e.target.value)}
                     className="w-full bg-white/5 rounded-lg border border-white/10 px-3 py-2 text-sm outline-none focus:border-[#ffa502] text-white"

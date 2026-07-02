@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { Users, DollarSign, CreditCard, Wallet, Activity } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 interface StatCard {
   title: string;
@@ -24,8 +25,8 @@ export function DashboardOverview() {
     totalWalletBalance: 0,
   });
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(""
-  );
+  const [error, setError] = useState("");
+  const [revenueSeries, setRevenueSeries] = useState<Array<{ day: string; revenue: number }>>([]);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -69,6 +70,23 @@ export function DashboardOverview() {
             return 0;
           })(),
         ]);
+
+        const { data: revenueData, error: revenueError } = await supabase
+          .from("transactions")
+          .select("amount, created_at")
+          .eq("type", "deposit")
+          .order("created_at", { ascending: true })
+          .limit(7);
+
+        if (!revenueError && Array.isArray(revenueData)) {
+          const grouped = new Map<string, number>();
+          revenueData.forEach((row: any) => {
+            const key = new Date(row.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+            grouped.set(key, (grouped.get(key) || 0) + Number(row.amount || 0));
+          });
+          const series = Array.from(grouped.entries()).map(([day, revenue]) => ({ day, revenue }));
+          setRevenueSeries(series.length ? series : [{ day: "Today", revenue: 0 }]);
+        }
 
         setStats({
           totalUsers: Number(totalUsers ?? 0),
@@ -168,11 +186,16 @@ export function DashboardOverview() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
             <h2 className="text-white font-bold text-lg mb-6">Revenue Trend (7 Days)</h2>
-            <div className="h-64 bg-[#0f3460] rounded-lg flex items-center justify-center">
-              <div className="text-center">
-                <div className="text-gray-500 text-sm">Chart placeholder</div>
-                <p className="text-gray-600 text-xs mt-2">Connect to Supabase for real data</p>
-              </div>
+            <div className="h-64 bg-[#0f3460] rounded-lg p-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={revenueSeries}>
+                  <CartesianGrid stroke="#1e3a5f" strokeDasharray="3 3" />
+                  <XAxis dataKey="day" stroke="#94a3b8" />
+                  <YAxis stroke="#94a3b8" />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="revenue" stroke="#e94560" strokeWidth={3} dot={{ r: 4 }} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
           <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">

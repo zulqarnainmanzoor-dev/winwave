@@ -26,33 +26,17 @@ export function GiftCodes() {
 
   const fetchCodes = async () => {
     setLoading(true);
+    setError('');
     try {
-      const candidates = [activeTable, "gift_codes", "gift_code_claims"] as const;
-      let lastError: any = null;
-
-      for (const tableName of candidates) {
-        const { data, error } = await supabase
-          .from(tableName)
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(200) as any;
-
-        if (!error) {
-          setActiveTable(tableName);
-          setCodes(data || []);
-          return;
-        }
-
-        lastError = error;
-        if (!isMissingTableError(error)) {
-          throw error;
-        }
-      }
-
-      throw lastError || new Error("Failed to load gift codes");
+      const { data, error } = await supabase
+        .from('gift_codes')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      setCodes(data || []);
     } catch (err: any) {
-      console.error(err);
-      setError(err?.message || "Failed to load gift codes");
+      setError(err?.message || 'Failed to load gift codes');
     } finally {
       setLoading(false);
     }
@@ -68,82 +52,38 @@ export function GiftCodes() {
   };
 
   const handleCreate = async () => {
-    setError("");
+    setError('');
     const code = newCode.trim() || generateRandomCode();
-    if (!code) {
-      setError("Please enter a code or leave blank to auto-generate.");
-      return;
-    }
-    if (!newAmount || newAmount <= 0) {
-      setError("Please enter a valid amount.");
-      return;
-    }
-
+    if (!newAmount || newAmount <= 0) { setError('Please enter a valid amount.'); return; }
     try {
-      const candidates = [activeTable, "gift_codes", "gift_code_claims"] as const;
-      let lastError: any = null;
-      for (const tableName of candidates) {
-        const { error } = await supabase.from(tableName).insert([{ code, amount: newAmount, status: "active" }]);
-        if (!error) {
-          setActiveTable(tableName);
-          setShowModal(false);
-          setNewCode("");
-          setNewAmount(300);
-          await fetchCodes();
-          return;
-        }
-        lastError = error;
-        if (!isMissingTableError(error)) throw error;
-      }
-      throw lastError || new Error("Failed to create gift code");
+      const { error } = await supabase
+        .from('gift_codes')
+        .insert([{ code, amount: newAmount, status: 'active' }]);
+      if (error) throw error;
+      setShowModal(false);
+      setNewCode('');
+      setNewAmount(300);
+      await fetchCodes();
     } catch (err: any) {
-      console.error(err);
-      setError(err?.message || "Failed to create gift code");
+      setError(err?.message || 'Failed to create gift code');
     }
   };
 
   const togglePause = async (row: GiftCodeRow) => {
     try {
-      const newStatus = row.status === "paused" ? "active" : "paused";
-      const candidates = [activeTable, "gift_codes", "gift_code_claims"] as const;
-      let lastError: any = null;
-      for (const tableName of candidates) {
-        const { error } = await supabase.from(tableName).update({ status: newStatus }).eq("id", row.id);
-        if (!error) {
-          setActiveTable(tableName);
-          await fetchCodes();
-          return;
-        }
-        lastError = error;
-        if (!isMissingTableError(error)) throw error;
-      }
-      throw lastError || new Error("Failed to update status");
-    } catch (err: any) {
-      console.error(err);
-      setError(err?.message || "Failed to update status");
-    }
+      const { error } = await supabase.from('gift_codes').update({ status: row.status === 'paused' ? 'active' : 'paused' }).eq('id', row.id);
+      if (error) throw error;
+      await fetchCodes();
+    } catch (err: any) { setError(err?.message || 'Failed to update'); }
   };
 
   const handleDelete = async (row: GiftCodeRow) => {
-    if (!confirm(`Delete gift code ${row.code}? This will mark it as deleted.`)) return;
+    if (!confirm(`Delete gift code ${row.code}?`)) return;
     try {
-      const candidates = [activeTable, "gift_codes", "gift_code_claims"] as const;
-      let lastError: any = null;
-      for (const tableName of candidates) {
-        const { error } = await supabase.from(tableName).update({ status: "deleted" }).eq("id", row.id);
-        if (!error) {
-          setActiveTable(tableName);
-          await fetchCodes();
-          return;
-        }
-        lastError = error;
-        if (!isMissingTableError(error)) throw error;
-      }
-      throw lastError || new Error("Failed to delete");
-    } catch (err: any) {
-      console.error(err);
-      setError(err?.message || "Failed to delete");
-    }
+      const { error } = await supabase.from('gift_codes').update({ status: 'deleted' }).eq('id', row.id);
+      if (error) throw error;
+      await fetchCodes();
+    } catch (err: any) { setError(err?.message || 'Failed to delete'); }
   };
 
   return (

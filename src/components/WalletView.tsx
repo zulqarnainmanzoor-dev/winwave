@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ChevronLeft, Wallet, ArrowRightLeft, X } from "lucide-react";
 import { useLanguage } from "../context/LanguageContext";
 import { useUser } from "../context/UserContext";
+import { supabase } from "../lib/supabaseClient";
 
 interface WalletViewProps {
   onBack: () => void;
@@ -17,6 +18,7 @@ export default function WalletView({ onBack }: WalletViewProps) {
     uid,
     wageringRequired,
     withdrawalPassword,
+    refreshUserData,
   } = useUser();
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [transferDirection, setTransferDirection] = useState<'to-game' | 'to-main'>('to-game');
@@ -37,20 +39,43 @@ export default function WalletView({ onBack }: WalletViewProps) {
       alert("Please enter a valid amount.");
       return;
     }
+    const available = transferDirection === 'to-game' ? mainWalletBalance : thirdPartyWalletBalance;
+    if (amount > available) {
+      alert('Insufficient balance.');
+      return;
+    }
 
-    // Call backend transfer endpoint
     (async () => {
       try {
-        const res = await fetch('/api/wallet/transfer', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: uid, from_type: transferDirection === 'to-game' ? 'main_balance' : 'game_balance', to_type: transferDirection === 'to-game' ? 'game_balance' : 'main_balance', amount }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-          alert(data.error || 'Transfer failed');
-          return;
-        }
+        const fromCol = transferDirection === 'to-game' ? 'main_balance' : 'game_balance';
+        const toCol   = transferDirection === 'to-game' ? 'game_balance' : 'main_balance';
+
+        // Read current values
+        const { data: row, error: fetchErr } = await supabase
+          .from('users')
+          .select('main_balance, game_balance')
+          .eq('id', uid)
+          .maybeSingle();
+
+        if (fetchErr || !row) { alert('Failed to fetch balance.'); return; }
+
+        const fromVal = parseFloat(row[fromCol] ?? 0);
+        const toVal   = parseFloat(row[toCol]   ?? 0);
+
+        if (amount > fromVal) { alert('Insufficient balance.'); return; }
+
+        const { error: updateErr } = await supabase
+          .from('users')
+          .update({
+            [fromCol]: parseFloat((fromVal - amount).toFixed(2)),
+            [toCol]:   parseFloat((toVal   + amount).toFixed(2)),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', uid);
+
+        if (updateErr) { alert('Transfer failed: ' + updateErr.message); return; }
+
+        await refreshUserData?.();
         setShowTransferModal(false);
         setTransferAmount('');
       } catch (e) {

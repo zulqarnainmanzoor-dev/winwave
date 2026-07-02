@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Settings as SettingsIcon, Save } from "lucide-react";
+import { supabase } from "../../lib/supabaseClient";
 
 export function Settings() {
   const [settings, setSettings] = useState({
@@ -20,10 +21,82 @@ export function Settings() {
   });
 
   const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSave = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const { data, error: fetchError } = await supabase
+          .from("platform_settings")
+          .select("*")
+          .maybeSingle();
+
+        if (fetchError) {
+          console.warn("Platform settings fetch failed", fetchError);
+          setLoading(false);
+          return;
+        }
+
+        if (data) {
+          setSettings({
+            platformName: data.platform_name || "WinWave",
+            maintenanceMode: Boolean(data.maintenance_mode ?? false),
+            minWithdrawal: Number(data.min_withdrawal ?? 1000),
+            maxWithdrawal: Number(data.max_withdrawal ?? 500000),
+            withdrawalFee: Number(data.withdrawal_fee ?? 2.5),
+            depositBonus: Number(data.deposit_bonus ?? 50),
+            referralCommission: Number(data.referral_commission ?? 10),
+            maxBetPerRound: Number(data.max_bet_per_round ?? 500000),
+            minBetPerRound: Number(data.min_bet_per_round ?? 100),
+            platformMarginTarget: Number(data.platform_margin_target ?? 8.5),
+            gameControlEnabled: Boolean(data.game_control_enabled ?? true),
+            smartRiskDefault: Boolean(data.smart_risk_default ?? false),
+            notificationsEnabled: Boolean(data.notifications_enabled ?? true),
+            autoApproveDeposit: Boolean(data.auto_approve_deposit ?? false),
+          });
+        }
+      } catch (err: any) {
+        console.warn("Platform settings load error", err);
+        setError(err?.message || "Unable to load platform settings.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void loadSettings();
+  }, []);
+
+  const handleSave = async () => {
+    setError(null);
+    try {
+      const payload = {
+        id: "default",
+        platform_name: settings.platformName,
+        maintenance_mode: settings.maintenanceMode,
+        min_withdrawal: settings.minWithdrawal,
+        max_withdrawal: settings.maxWithdrawal,
+        withdrawal_fee: settings.withdrawalFee,
+        deposit_bonus: settings.depositBonus,
+        referral_commission: settings.referralCommission,
+        max_bet_per_round: settings.maxBetPerRound,
+        min_bet_per_round: settings.minBetPerRound,
+        platform_margin_target: settings.platformMarginTarget,
+        game_control_enabled: settings.gameControlEnabled,
+        smart_risk_default: settings.smartRiskDefault,
+        notifications_enabled: settings.notificationsEnabled,
+        auto_approve_deposit: settings.autoApproveDeposit,
+      };
+
+      const { error: upsertError } = await supabase.from("platform_settings").upsert(payload, { onConflict: "id" });
+      if (upsertError) throw upsertError;
+
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      console.error("Platform settings save failed", err);
+      setError(err?.message || "Unable to save platform settings.");
+    }
   };
 
   return (
@@ -34,6 +107,8 @@ export function Settings() {
           <h1 className="text-3xl font-bold text-white mb-2">Platform Settings</h1>
           <p className="text-gray-400">Configure platform-wide settings and policies</p>
         </div>
+
+        {error && <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
 
         <div className="grid grid-cols-2 gap-8">
           {/* General Settings */}
@@ -233,10 +308,11 @@ export function Settings() {
           </button>
           <button
             onClick={handleSave}
-            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[#e94560] to-[#ff6b6b] text-white rounded-lg hover:shadow-lg hover:shadow-red-500/30 transition-all font-medium"
+            disabled={loading}
+            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[#e94560] to-[#ff6b6b] text-white rounded-lg hover:shadow-lg hover:shadow-red-500/30 transition-all font-medium disabled:opacity-60"
           >
             <Save className="w-4 h-4" />
-            Save Settings
+            {loading ? "Loading..." : "Save Settings"}
           </button>
         </div>
 

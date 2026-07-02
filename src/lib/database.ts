@@ -8,7 +8,7 @@ import { supabase, Database } from './supabaseClient';
 export async function fetchProfile(userId: string) {
   const { data, error } = await supabase
     .from('users')
-    .select('*')
+    .select('id, phone_number, invite_code, inviter_code, main_balance, game_balance, total_bets, vip_level, is_agent, agent_id, manual_verification, referred_by, withdrawal_pin, bank_details, created_at')
     .eq('id', userId)
     .maybeSingle();
   if (error) console.error('fetchProfile error:', error);
@@ -115,32 +115,6 @@ export async function createWithdrawRequest(request: Omit<Database['public']['Ta
     .maybeSingle();
   if (error) console.error('createWithdrawRequest error:', error);
   return { data, error };
-}
-
-// --- Betting History ---
-export async function fetchYesterdayCommission(userId: string) {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  yesterday.setHours(0, 0, 0, 0);
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  const { data, error } = await supabase
-    .from('betting_history')
-    .select('amount')
-    .eq('user_id', userId)
-    .gte('created_at', yesterday.toISOString())
-    .lt('created_at', today.toISOString());
-
-  if (error) {
-    console.error('fetchYesterdayCommission error:', error);
-    return { total: 0, error };
-  }
-
-  const total = (data || []).reduce((sum, bet) => sum + (bet.amount || 0), 0);
-  const commission = total * 0.01; // 1% commission rate
-  return { total: commission, error: null };
 }
 
 // --- Referrals ---

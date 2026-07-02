@@ -74,21 +74,44 @@ export default function PromotionView() {
     return <InvitationRulesView onBack={() => setShowInvitationRules(false)} />;
   }
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(referralCode);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
+  const getReferralCodeForShare = () => {
+    return (referralCode?.trim() || localStorage.getItem('winwave_referral_code') || '').trim();
+  };
+
+  const handleCopyCode = async () => {
+    const codeToCopy = getReferralCodeForShare();
+    if (!codeToCopy) {
+      alert('Invite code is not available yet.');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(codeToCopy);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy invite code:', err);
+      alert('Failed to copy invite code. Please try again.');
+    }
   };
 
   const handleInviteFriends = async () => {
+    const codeToShare = getReferralCodeForShare();
+    if (!codeToShare) {
+      alert('Invite code is not available yet.');
+      return;
+    }
+
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://winwave-official.vercel.app';
+    const inviteLink = `${origin}/#/register?ref=${encodeURIComponent(codeToShare)}`;
+
     try {
-      const inviteLink = `${window.location.origin}/#/register?ref=${referralCode}`;
       await navigator.clipboard.writeText(inviteLink);
       setCopiedInvite(true);
       setTimeout(() => setCopiedInvite(false), 2000);
     } catch (err) {
       console.error('Failed to copy invite link:', err);
-      alert('Failed to copy link. Please try again.');
+      alert('Failed to copy invite link. Please try again.');
     }
   };
 
@@ -97,35 +120,25 @@ export default function PromotionView() {
       setClaimMessage('No commission available to claim.');
       return;
     }
-
     setClaimingCommission(true);
     setClaimMessage(null);
-
     try {
-      const { data: walletRow, error: walletError } = await supabase
-        .from('wallets')
+      const { data: userRow, error: fetchErr } = await supabase
+        .from('users')
         .select('main_balance')
-        .eq('user_id', uid)
+        .eq('id', uid)
         .maybeSingle();
-
-      if (walletError) throw walletError;
-
-      const currentBalance = Number(walletRow?.main_balance || 0);
-      const commissionAmount = Number(totalCommissions || 0);
-      const nextBalance = currentBalance + commissionAmount;
-
-      const { error: updateError } = await supabase
-        .from('wallets')
-        .update({ main_balance: nextBalance })
-        .eq('user_id', uid);
-
-      if (updateError) throw updateError;
-
-      setBalance(balance + commissionAmount);
+      if (fetchErr) throw fetchErr;
+      const next = Number(userRow?.main_balance ?? 0) + Number(totalCommissions);
+      const { error: updateErr } = await supabase
+        .from('users')
+        .update({ main_balance: next })
+        .eq('id', uid);
+      if (updateErr) throw updateErr;
+      setBalance(balance + Number(totalCommissions));
       setTotalCommissions(0);
-      setClaimMessage(`Claimed Rs ${commissionAmount.toLocaleString()} to your main wallet.`);
+      setClaimMessage(`Claimed Rs ${Number(totalCommissions).toLocaleString()} to your main wallet.`);
     } catch (err: any) {
-      console.error('Claim commission failed', err);
       setClaimMessage(err?.message || 'Unable to claim commission right now.');
     } finally {
       setClaimingCommission(false);
@@ -173,7 +186,7 @@ export default function PromotionView() {
     setIsDragging(false);
   };
 
-  const handleGiftRedeem = (e: React.FormEvent) => {
+  const handleGiftRedeem = async (e: React.FormEvent) => {
     e.preventDefault();
     setGiftError("");
     setGiftSuccess("");
@@ -183,15 +196,60 @@ export default function PromotionView() {
       setGiftError("Please enter a valid gift code.");
       return;
     }
+    if (!uid) {
+      setGiftError("Please log in before redeeming a gift code.");
+      return;
+    }
 
-    // Supported gift codes
-    if (code === "GIFT777" || code === "BONUS2026" || code === "WINWAVE7") {
-      const reward = code === "WINWAVE7" ? 500 : 100;
-      setBalance(balance + reward);
+    try {
+      const { data: existingClaim } = await supabase
+        .from('gift_code_claims' as any)
+        .select('id')
+        .eq('user_id', uid)
+        .eq('gift_code', code)   // correct column name
+        .maybeSingle();
+
+      if (existingClaim?.id) {
+        setGiftError('You have already claimed this gift code once!');
+        return;
+      }
+
+      const { data: giftRow, error: giftRowError } = await supabase
+        .from('gift_codes' as any)
+        .select('id, amount')
+        .eq('code', code)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (giftRowError || !giftRow?.id) {
+        setGiftError('Invalid or expired gift code.');
+        return;
+      }
+
+      const reward = Number(giftRow.amount || 0);
+      const { data: userRow, error: userFetchErr } = await supabase
+        .from('users')
+        .select('main_balance')
+        .eq('id', uid)
+        .maybeSingle();
+      if (userFetchErr) throw userFetchErr;
+      const nextBalance = Number(userRow?.main_balance ?? 0) + reward;
+      const { error: userUpdateErr } = await supabase
+        .from('users')
+        .update({ main_balance: nextBalance })
+        .eq('id', uid);
+      if (userUpdateErr) throw userUpdateErr;
+
+      await supabase
+        .from('gift_code_claims' as any)
+        .insert([{ user_id: uid, gift_code: code, amount: reward, created_at: new Date().toISOString() }]);
+
+      setBalance(nextBalance);
       setGiftSuccess(`Redeemed successfully! Rs ${reward.toLocaleString()} has been added to your wallet.`);
       setGiftCode("");
-    } else {
-      setGiftError("Invalid or expired gift code.");
+    } catch (err: any) {
+      console.error('Gift redemption failed', err);
+      setGiftError(err?.message || 'Unable to redeem gift code right now.');
     }
   };
 

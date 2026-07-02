@@ -370,17 +370,21 @@ export default function Deposit({
         </div>
       </div>
 
-      {/* Pay Now Button */}
-      <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-[#08101f] backdrop-blur-sm z-50 border-t border-white/10">
-        <button
-          onClick={handlePayNow}
-          type="button"
-          disabled={!isAmountSupported}
-          className={`w-full text-white font-bold text-lg py-3.5 rounded-full shadow-lg ${isAmountSupported ? 'bg-[#2563eb] hover:bg-[#1d4ed8] shadow-[#2563eb]/30' : 'bg-gray-600 opacity-60 cursor-not-allowed' } transition-all`}
-        >
-          Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
-        </button>
-      </div>
+      {/* Pay Now Button - Fixed Mobile Safe Zone with Neon Blue Glow */}
+<div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-[#0c1933]/90 backdrop-blur-md z-50 border-t border-blue-500/20 pb-safe shadow-[0_-10px_25px_rgba(37,99,235,0.15)]">
+  <button
+    onClick={handlePayNow}
+    type="button"
+    disabled={!isAmountSupported}
+    className={`w-full text-white font-bold text-lg py-3.5 rounded-full transition-all duration-300 active:scale-[0.98] ${
+      isAmountSupported 
+        ? 'bg-[#3b82f6] hover:bg-[#2563eb] shadow-[0_0_20px_rgba(59,130,246,0.6)] hover:shadow-[0_0_28px_rgba(37,99,235,0.8)] border border-blue-400/40 text-glow' 
+        : 'bg-slate-700 opacity-40 cursor-not-allowed border border-white/5'
+    }`}
+  >
+    Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
+  </button>
+</div>
     </div>
   );
 }
