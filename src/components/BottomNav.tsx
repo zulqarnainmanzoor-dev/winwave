@@ -52,7 +52,7 @@ const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onTabChange }) => {
   ];
 
   return (
-    <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#0F0F11] rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.5)] z-50 border-t border-white/5">
+    <div data-bottomnav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-[#0F0F11] rounded-t-3xl shadow-[0_-5px_20px_rgba(0,0,0,0.5)] z-50 border-t border-white/5">
       <div className="flex justify-around items-end h-[72px] pb-3 relative px-2">
         {navItems.map((item) => (
           <NavLink

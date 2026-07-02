@@ -1,21 +1,23 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ChevronLeft,
   Volume2,
   VolumeX,
   History,
-  BarChart2,
-  User,
-  Wallet,
   HeadphonesIcon,
   RefreshCw,
   ChevronDown,
   ChevronUp,
-  CheckCircle,
   Copy,
 } from "lucide-react";
 import { useUser } from "../context/UserContext";
 import { useLanguage } from "../context/LanguageContext";
+import { useSound } from "../hooks/useSound";
+import { usePlatformName } from "../hooks/usePlatformName";
+import { WinGoResultPopup } from "./WinGoResultPopup";
+import { ResultBall } from "./ResultBall";
+import { ColorDot } from "./ResultBall";
+import { supabase } from "../lib/supabaseClient";
 
 // Simple deterministic RNG based on period string
 function getResultForPeriod(periodStr: string) {
@@ -67,9 +69,12 @@ const getCurrentRoundData = (intervalSeconds: number) => {
 
 export default function WinGoView({ onBack }: { onBack: () => void }) {
   const { t } = useLanguage();
-  const { thirdPartyWalletBalance, setThirdPartyWalletBalance, addWageringProgress, totalBalance } = useUser();
-  const [isMuted, setIsMuted] = useState(false);
+  const { thirdPartyWalletBalance, setThirdPartyWalletBalance, addWageringProgress, wageringRequired, wageringCompleted } = useUser();
+  const { isMuted, toggleMute, play } = useSound();
+  const platformName = usePlatformName("WinWave");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Track which seconds (5,4,3,2,1) have already fired a tick for the current period+tab
+  const tickFiredRef = useRef<Set<string>>(new Set());
 
   const [timeLeft, setTimeLeft] = useState(30);
   const [period, setPeriod] = useState("");
@@ -94,6 +99,112 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
   const [myBets, setMyBets] = useState<any[]>([]);
   const [expandedBetId, setExpandedBetId] = useState<string | null>(null);
   const [resultPopup, setResultPopup] = useState<any | null>(null);
+  // Admin-injected target result from DB (null = auto)
+  const targetResultRef = useRef<string | null>(null);
+  const roundIdRef      = useRef<string | null>(null);
+
+  // ── Register round in DB + subscribe to target_result changes ───
+  const getMode = (tab: string) => {
+    if (tab === "Win Go 1Min") return "1m";
+    if (tab === "Win Go 3Min") return "3m";
+    if (tab === "Win Go 5Min") return "5m";
+    return "30s";
+  };
+
+  // ── Build local RNG history (instant fallback, always 10 rows) ──
+  const buildLocalHistory = useCallback((currentPeriod: string, intervalSeconds: number) => {
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}`;
+    let prefix = "1000";
+    if (intervalSeconds === 60)  prefix = "2000";
+    if (intervalSeconds === 180) prefix = "3000";
+    if (intervalSeconds === 300) prefix = "4000";
+    const secs = now.getHours()*3600 + now.getMinutes()*60 + now.getSeconds();
+    const currentRoundNum = Math.floor(secs / intervalSeconds) + 1;
+    const rows = [];
+    for (let i = 1; i <= 10; i++) {
+      const rn = currentRoundNum - i;
+      if (rn <= 0) continue;
+      const p = `${dateStr}${prefix}${String(rn).padStart(5,"0")}`;
+      rows.push({ period: p, ...getResultForPeriod(p) });
+    }
+    return rows;
+  }, []);
+
+  // ── Fetch last 10 completed rounds from DB; fall back to local RNG ──
+  const fetchHistory = useCallback(async (currentPeriod: string, intervalSeconds: number) => {
+    try {
+      const { data, error } = await supabase
+        .from("game_rounds")
+        .select("period,result_number,result_size,result_color")
+        .eq("game_type", "wingo")
+        .eq("mode", getMode(activeTab))
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      if (!error && data && data.length > 0) {
+        setHistory(data.map((r: any) => ({
+          period: r.period,
+          number: r.result_number,
+          size:   r.result_size,
+          color:  r.result_color,
+        })));
+      } else {
+        // DB empty or error — use deterministic local RNG so history is never blank
+        setHistory(buildLocalHistory(currentPeriod, intervalSeconds));
+      }
+    } catch {
+      setHistory(buildLocalHistory(currentPeriod, intervalSeconds));
+    }
+  }, [activeTab, buildLocalHistory]);
+
+  // Fetch history on tab change + every new period
+  useEffect(() => {
+    const intervalSeconds = activeTab === "Win Go 1Min" ? 60 : activeTab === "Win Go 3Min" ? 180 : activeTab === "Win Go 5Min" ? 300 : 30;
+    void fetchHistory(period, intervalSeconds);
+  }, [activeTab, period, fetchHistory]);
+
+  // ── Sync with server-side active round (DB is authoritative) ───
+  const upsertRound = useCallback(async (currentPeriod: string, _endsAt: Date) => {
+    try {
+      const { data } = await supabase.rpc("get_active_round", {
+        p_game_type: "wingo",
+        p_mode:      getMode(activeTab),
+      });
+      if (data?.[0]) {
+        roundIdRef.current      = data[0].id;
+        targetResultRef.current = data[0].target_result ?? null;
+      }
+    } catch { /* non-critical */ }
+  }, [activeTab]);
+
+  // Realtime listener: when admin sets target_result, update our ref
+  useEffect(() => {
+    if (!period) return;
+    const channel = supabase
+      .channel(`wingo-round-${period}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "game_rounds",
+          filter: `period=eq.${period}` },
+        (payload) => {
+          targetResultRef.current = (payload.new as any)?.target_result ?? null;
+        }
+      )
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [period]);
+
+  // Hide BottomNav while bet modal or result popup is open
+  useEffect(() => {
+    const nav = document.querySelector('[data-bottomnav]') as HTMLElement | null;
+    if (nav) nav.style.display = (showBetModal || !!resultPopup) ? 'none' : '';
+    return () => {
+      const n = document.querySelector('[data-bottomnav]') as HTMLElement | null;
+      if (n) n.style.display = '';
+    };
+  }, [showBetModal, resultPopup]);
 
   useEffect(() => {
     const getIntervalSeconds = (tab: string) => {
@@ -123,27 +234,26 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
       if (currentRemaining <= 5) {
         setIsTimeUp(true);
-        setShowBetModal(false); // Close modal when time is up
+        setShowBetModal(false);
+        // Fire a tick at each of 5,4,3,2,1 — once per second per period+tab
+        if (currentRemaining >= 1 && currentRemaining <= 5) {
+          const tickKey = `${currentPeriod}-${activeTab}-${currentRemaining}`;
+          if (!tickFiredRef.current.has(tickKey)) {
+            tickFiredRef.current.add(tickKey);
+            play("tick");
+            // Prune old keys to avoid unbounded growth
+            if (tickFiredRef.current.size > 50) tickFiredRef.current.clear();
+          }
+        }
       } else {
         setIsTimeUp(false);
       }
 
-      // Generate history for the last 10 rounds
-      const newHistory = [];
-      for (let i = 1; i <= 10; i++) {
-        const histRound = roundNumber - i;
-        if (histRound > 0) {
-          const histPeriod = `${dateStr}${prefix}${String(histRound).padStart(5, "0")}`;
-          newHistory.push({
-            period: histPeriod,
-            ...getResultForPeriod(histPeriod),
-          });
-        }
-      }
-      setHistory(newHistory);
-
       if (currentPeriod !== period) {
         setPeriod(currentPeriod);
+        // Register new round in DB (fire-and-forget)
+        const endsAt = new Date(Date.now() + currentRemaining * 1000);
+        void upsertRound(currentPeriod, endsAt);
       }
     };
 
@@ -152,9 +262,54 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
     return () => clearInterval(timer);
   }, [activeTab, period]);
 
+  // Track the last period we resolved bets for — prevents re-resolving on history refresh
+  const lastResolvedPeriodRef = useRef<string>("");
+
   useEffect(() => {
-    if (history.length > 0) {
-      const latestResult = history[0];
+    if (history.length === 0) return;
+    const latestResult = history[0];
+    // Only resolve once per period, and only for periods that have actually ended
+    if (!latestResult.period || latestResult.period === lastResolvedPeriodRef.current) return;
+    // Don't resolve if this is the current live period (still active)
+    if (latestResult.period === period) return;
+    lastResolvedPeriodRef.current = latestResult.period;
+
+      // Apply admin-forced target_result at resolution time
+      const forced = targetResultRef.current; // 'BIG' | 'SMALL' | 'NUM:X' | null
+      let effectiveResult = { ...latestResult };
+      if (forced === "BIG" && latestResult.size !== "Big") {
+        // Safe Big range: 6-9 (avoids 5=violet)
+        const bigNum = [6, 7, 8, 9][latestResult.number % 4];
+        effectiveResult = {
+          number: bigNum,
+          size:   "Big",
+          color:  bigNum % 2 === 0 ? "red" : "green",
+          period: latestResult.period,
+        };
+      } else if (forced === "SMALL" && latestResult.size !== "Small") {
+        // Safe Small range: 1-4 (avoids 0=violet)
+        const smallNum = [1, 2, 3, 4][latestResult.number % 4];
+        effectiveResult = {
+          number: smallNum,
+          size:   "Small",
+          color:  smallNum % 2 === 0 ? "red" : "green",
+          period: latestResult.period,
+        };
+      } else if (forced?.startsWith("NUM:")) {
+        // Exact number forced via chat command
+        const exactNum = parseInt(forced.slice(4), 10);
+        if (!isNaN(exactNum) && exactNum >= 0 && exactNum <= 9) {
+          effectiveResult = {
+            number: exactNum,
+            size:   exactNum >= 5 ? "Big" : "Small",
+            color:  exactNum === 0 || exactNum === 5 ? "violet" : exactNum % 2 === 0 ? "red" : "green",
+            period: latestResult.period,
+          };
+        }
+      }
+      // Clear the forced target after consuming it
+      if (forced) targetResultRef.current = null;
+
       setMyBets((prev) => {
         let hasUpdates = false;
         let latestResolvedBet = null;
@@ -162,30 +317,18 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
         const newBets = prev.map((bet) => {
           // If the bet is for the period that just ended and is pending
-          if (bet.status === "pending" && bet.period === latestResult.period) {
+          if (bet.status === "pending" && bet.period === effectiveResult.period) {
             hasUpdates = true;
             let isWin = false;
 
-            if (bet.type === "size" && bet.value === latestResult.size)
+            if (bet.type === "size" && bet.value === effectiveResult.size)
               isWin = true;
-            if (
-              bet.type === "number" &&
-              Number(bet.value) === latestResult.number
-            )
+            if (bet.type === "number" && Number(bet.value) === effectiveResult.number)
               isWin = true;
             if (bet.type === "color") {
-              if (
-                bet.value === "Green" &&
-                (latestResult.color === "green" || latestResult.number === 5)
-              )
-                isWin = true;
-              if (
-                bet.value === "Red" &&
-                (latestResult.color === "red" || latestResult.number === 0)
-              )
-                isWin = true;
-              if (bet.value === "Violet" && latestResult.color === "violet")
-                isWin = true;
+              if (bet.value === "Green" && (effectiveResult.color === "green" || effectiveResult.number === 5)) isWin = true;
+              if (bet.value === "Red"   && (effectiveResult.color === "red"   || effectiveResult.number === 0)) isWin = true;
+              if (bet.value === "Violet" && effectiveResult.color === "violet") isWin = true;
             }
 
             // For color and size, win is 1.96 * total amount. (Profit is 96%).
@@ -202,9 +345,9 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
               status: isWin ? "win" : "lose",
               isWin,
               winAmount,
-              resultNumber: latestResult.number,
-              resultColor: latestResult.color,
-              resultSize: latestResult.size,
+              resultNumber: effectiveResult.number,
+              resultColor:  effectiveResult.color,
+              resultSize:   effectiveResult.size,
             };
 
             if (bet.tab === activeTab) {
@@ -218,7 +361,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
         if (latestResolvedBet) {
           setResultPopup(latestResolvedBet);
-          playSound(latestResolvedBet.isWin ? "win" : "lose");
+          play(latestResolvedBet.isWin ? "win" : "lose");
         }
 
         if (totalWinAmount > 0) {
@@ -227,8 +370,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
         return hasUpdates ? newBets : prev;
       });
-    }
-  }, [history, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance]);
+  }, [history, period, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -256,63 +398,10 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
     }, 100);
   };
 
-  const playSound = (type: "click" | "win" | "lose" | "cash") => {
-    if (isMuted) return;
-
-    try {
-      const AudioContext =
-        window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContext) return;
-      const ctx = new AudioContext();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      if (type === "click") {
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(600, ctx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.1);
-        gain.gain.setValueAtTime(0.1, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.1);
-      } else if (type === "win") {
-        osc.type = "triangle";
-        osc.frequency.setValueAtTime(400, ctx.currentTime);
-        osc.frequency.setValueAtTime(600, ctx.currentTime + 0.1);
-        osc.frequency.setValueAtTime(800, ctx.currentTime + 0.2);
-        osc.frequency.setValueAtTime(1200, ctx.currentTime + 0.3);
-        gain.gain.setValueAtTime(0.2, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.5);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.5);
-      } else if (type === "lose") {
-        osc.type = "sawtooth";
-        osc.frequency.setValueAtTime(300, ctx.currentTime);
-        osc.frequency.linearRampToValueAtTime(100, ctx.currentTime + 0.5);
-        gain.gain.setValueAtTime(0.2, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.5);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.5);
-      } else if (type === "cash") {
-        osc.type = "square";
-        osc.frequency.setValueAtTime(800, ctx.currentTime);
-        osc.frequency.setValueAtTime(1200, ctx.currentTime + 0.1);
-        gain.gain.setValueAtTime(0.1, ctx.currentTime);
-        gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.2);
-      }
-    } catch (e) {
-      console.log("Audio playback failed", e);
-    }
-  };
 
   const handleBetSelect = (type: string, value: string | number) => {
     if (isTimeUp || isRandomizing) return;
-    playSound("click");
+    play("click");
     setSelectedBet({ type, value });
     setBetAmount(1);
     setBetQuantity(1);
@@ -322,32 +411,41 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
   const handlePlaceBet = () => {
     const total = betAmount * betQuantity * betMultiplier;
-    if (thirdPartyWalletBalance < total) {
-      alert("Insufficient game wallet balance. Transfer funds from ARWallet first.");
-      return;
-    }
+    if (thirdPartyWalletBalance < total) return;
 
-    playSound("cash");
+    play("cash");
     setThirdPartyWalletBalance(thirdPartyWalletBalance - total);
     addWageringProgress(total);
-    setMyBets((prev) => [
-      {
-        id: `WG${Date.now()}${Math.floor(Math.random() * 100000)}`,
-        tab: activeTab,
-        type: selectedBet.type,
-        period,
-        date: new Date().toLocaleString(),
-        size: selectedBet.type === "size" ? selectedBet.value : "-",
-        value: selectedBet.value,
-        amount: total,
-        quantity: betQuantity,
-        amountAfterTax: total * 0.98,
-        tax: total * 0.02,
-        isWin: false,
-        status: "pending",
-      },
-      ...prev,
-    ]);
+
+    const betRecord = {
+      id: `WG${Date.now()}${Math.floor(Math.random() * 100000)}`,
+      tab: activeTab,
+      type: selectedBet.type,
+      period,
+      date: new Date().toLocaleString(),
+      size: selectedBet.type === "size" ? selectedBet.value : "-",
+      value: selectedBet.value,
+      amount: total,
+      quantity: betQuantity,
+      amountAfterTax: total * 0.98,
+      tax: total * 0.02,
+      isWin: false,
+      status: "pending",
+    };
+
+    setMyBets((prev) => [betRecord, ...prev]);
+
+    // Persist to betting_history table (fire-and-forget)
+    supabase.from("betting_history").insert({
+      period,
+      game_type: "wingo",
+      mode:      getMode(activeTab),
+      bet_type:  selectedBet.type,
+      bet_value: String(selectedBet.value),
+      amount:    total,
+      round_id:  roundIdRef.current ?? undefined,
+    }).then(({ error }) => { if (error) console.warn("betting_history insert:", error.message); });
+
     setShowBetModal(false);
   };
 
@@ -379,82 +477,93 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
           className="w-6 h-6 text-white cursor-pointer"
           onClick={onBack}
         />
-        <div className="flex items-center justify-center flex-1">
-          <img
-            src="/assets/gameCategories/vip.webp"
-            alt="WinWave"
-            className="h-6 object-contain"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-              e.currentTarget.nextElementSibling?.classList.remove("hidden");
-            }}
-          />
-          {/* Fallback text logo with orange flash */}
-          <span className="hidden">
-            <span className="text-[#F59E0B] font-black text-lg tracking-widest uppercase relative">
-              <span className="absolute -top-1 -left-1 text-amber-500 opacity-40 blur-[1px]">WinWave</span>
-              <span className="relative inline-block animate-pulseOrange">
-                <span className="translate-y-[-2px]">WinWave</span>
-              </span>
-            </span>
-          </span>
-        </div>
-        <div className="flex gap-4">
+        {/* Dynamic platform name from Supabase platform_settings */}
+        <span className="text-[#ffa502] font-black text-lg tracking-widest uppercase">
+          {platformName}
+        </span>
+        <div className="flex gap-4 items-center">
           <HeadphonesIcon className="w-5 h-5 text-gray-400 cursor-pointer" />
+          <img
+            src="/assets/svg/icon_sevice.png"
+            alt="support"
+            className="w-5 h-5 cursor-pointer"
+            style={{ filter: "brightness(0) saturate(100%) invert(62%) sepia(97%) saturate(1200%) hue-rotate(1deg) brightness(103%) contrast(104%)" }}
+          />
           {isMuted ? (
-            <VolumeX
-              className="w-5 h-5 text-gray-400 cursor-pointer"
-              onClick={() => setIsMuted(false)}
-            />
+            <VolumeX className="w-5 h-5 text-gray-400 cursor-pointer" onClick={toggleMute} />
           ) : (
-            <Volume2
-              className="w-5 h-5 text-gray-400 cursor-pointer"
-              onClick={() => setIsMuted(true)}
-            />
+            <Volume2 className="w-5 h-5 text-gray-400 cursor-pointer" onClick={toggleMute} />
           )}
         </div>
       </div>
 
       <div className="p-4 space-y-4">
-        {/* Wallet Card */}
-        <div className="bg-[#2B2735] rounded-xl p-5 shadow-lg border border-white/5 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-purple-500/10 rounded-full blur-2xl"></div>
-          <div className="absolute bottom-0 left-0 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl"></div>
-
-          <div className="flex flex-col items-center justify-center relative z-10 mb-4">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-white font-bold text-2xl">
-                Rs.{thirdPartyWalletBalance.toFixed(2)}
-              </span>
-              <RefreshCw
-                className={`w-4 h-4 text-gray-400 cursor-pointer hover:text-white transition-colors ${isRefreshing ? "animate-spin" : ""}`}
-                onClick={() => {
-                  setIsRefreshing(true);
-                  setTimeout(() => setIsRefreshing(false), 1000);
-                }}
-              />
-            </div>
-            <div className="flex items-center gap-2 text-amber-500 text-xs font-bold bg-amber-500/10 px-3 py-1 rounded-full">
-              <Wallet className="w-3 h-3" />
-              Game wallet balance
-            </div>
-          </div>
-
-          <div className="flex gap-4 relative z-10">
-            <button
-              className="flex-1 bg-red-500 hover:bg-red-600 text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm"
-              onClick={() => { window.location.hash = '#/withdraw'; }}
+        {/* Wallet Card — background image from assets */}
+        {(() => {
+          const remainingWager = Math.max(0, wageringRequired - wageringCompleted);
+          const hasWager = remainingWager > 0;
+          return (
+            <div
+              className="rounded-xl overflow-hidden shadow-lg relative"
+              style={{
+                backgroundImage: "url('/assets/svg/WinGoView-walletbg for the balacne background.png')",
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+              }}
             >
-              Withdraw
-            </button>
-            <button
-              className="flex-1 bg-green-500 hover:bg-green-600 text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm"
-              onClick={() => { window.location.hash = '#/deposit'; }}
-            >
-              Deposit
-            </button>
-          </div>
-        </div>
+              {/* Dark overlay for text readability */}
+              <div className="absolute inset-0 bg-black/45" />
+
+              <div className="relative z-10 p-5">
+                <div className="flex flex-col items-center justify-center mb-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-white font-bold text-2xl drop-shadow">
+                      Rs.{thirdPartyWalletBalance.toFixed(2)}
+                    </span>
+                    <RefreshCw
+                      className={`w-4 h-4 text-white/70 cursor-pointer hover:text-white transition-colors ${isRefreshing ? "animate-spin" : ""}`}
+                      onClick={() => { setIsRefreshing(true); setTimeout(() => setIsRefreshing(false), 1000); }}
+                    />
+                  </div>
+                  <span className="text-[#ffa502] text-xs font-bold bg-black/30 px-3 py-0.5 rounded-full">
+                    {hasWager ? "Cash Balance" : "Game Wallet"}
+                  </span>
+                </div>
+
+                {/* Wagering indicator */}
+                <div className="flex justify-center mb-3">
+                  <span className="text-white/60 text-[10px]">
+                    Wager remaining:&nbsp;
+                    <span className="text-[#ffa502] font-bold">
+                      {hasWager ? `Rs ${remainingWager.toFixed(2)}` : "Rs 0.00"}
+                    </span>
+                  </span>
+                </div>
+
+                <div className="flex gap-4">
+                  {/* Withdraw disabled when wager remaining */}
+                  <button
+                    className={`flex-1 font-bold py-3 rounded-full transition-colors shadow-md text-sm ${
+                      hasWager
+                        ? "bg-gray-600 text-gray-400 cursor-not-allowed opacity-60"
+                        : "bg-[#ff4757] hover:bg-[#ff6b81] text-white"
+                    }`}
+                    disabled={hasWager}
+                    onClick={() => !hasWager && (window.location.hash = "#/withdraw")}
+                  >
+                    Withdraw
+                  </button>
+                  <button
+                    className="flex-1 bg-[#2ed573] hover:bg-[#7bed9f] text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm"
+                    onClick={() => (window.location.hash = "#/deposit")}
+                  >
+                    Deposit
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Notice Bar */}
         <div className="bg-[#2B2735] rounded-xl p-3 flex items-center justify-between shadow-sm border border-white/5">
@@ -469,42 +578,32 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
           </button>
         </div>
 
-        {/* Time Tabs */}
+        {/* Time Tabs — PNG icons: time.png (normal) / time_a-orange.png (active) */}
         <div className="bg-[#2B2735] rounded-xl p-2 flex border border-white/5 shadow-sm">
-          {["Win Go 30s", "Win Go 1Min", "Win Go 3Min", "Win Go 5Min"].map(
-            (tab) => (
+          {["Win Go 30s", "Win Go 1Min", "Win Go 3Min", "Win Go 5Min"].map((tab) => {
+            const isActive = activeTab === tab;
+            return (
               <div
                 key={tab}
                 onClick={() => setActiveTab(tab)}
                 className={`flex-1 flex flex-col items-center justify-center py-2 rounded-lg cursor-pointer transition-colors ${
-                  activeTab === tab
-                    ? "bg-gradient-to-b from-[#fcd34d] to-[#fbbf24] text-black"
+                  isActive
+                    ? "bg-gradient-to-b from-[#ffa502] to-[#ff7f00] text-white"
                     : "text-gray-400 hover:bg-white/5"
                 }`}
               >
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center mb-1 ${activeTab === tab ? "bg-white/20" : "bg-gray-600"}`}
-                >
-                  <div
-                    className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${activeTab === tab ? "border-black/50 text-black/50" : "border-gray-400"}`}
-                  >
-                    {/* Clock hands simulation */}
-                    <div className="w-2 h-2 relative">
-                      <div
-                        className={`absolute top-0 left-1/2 w-0.5 h-1.5 -ml-[0.5px] ${activeTab === tab ? "bg-black/50" : "bg-gray-400"}`}
-                      ></div>
-                      <div
-                        className={`absolute top-1 left-1/2 w-1.5 h-0.5 ${activeTab === tab ? "bg-black/50" : "bg-gray-400"}`}
-                      ></div>
-                    </div>
-                  </div>
-                </div>
+                <img
+                  src={isActive ? "/assets/svg/time_a-orange.png" : "/assets/svg/time.png"}
+                  alt="time"
+                  className="w-7 h-7 mb-1 object-contain"
+                  style={isActive ? { filter: "drop-shadow(0 0 4px #ffa502)" } : undefined}
+                />
                 <span className="text-[10px] font-bold text-center leading-tight whitespace-pre-wrap">
                   {tab.replace(" ", "\n")}
                 </span>
               </div>
-            ),
-          )}
+            );
+          })}
         </div>
 
         {/* Play Banner */}
@@ -596,26 +695,21 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
             </button>
           </div>
 
-          <div className="bg-white rounded-xl p-4 mb-4 grid grid-cols-5 gap-3 shadow-inner relative">
+          <div className="bg-[#1A1A1D] rounded-xl p-4 mb-4 grid grid-cols-5 gap-3 shadow-inner relative">
             {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((num) => {
-              let colorClass = "";
-              if (num === 0 || num === 5) {
-                colorClass = "from-purple-500 to-purple-400";
-              } else if (num % 2 === 0) {
-                colorClass = "from-red-500 to-red-400";
-              } else {
-                colorClass = "from-green-500 to-green-400";
-              }
-
               const isHighlighted = highlightedNumber === num;
-
               return (
                 <button
                   key={num}
                   onClick={() => handleBetSelect("number", num)}
-                  className={`aspect-square rounded-full flex items-center justify-center bg-gradient-to-br ${colorClass} text-white font-bold text-lg shadow-md transition-all ${isHighlighted ? "scale-125 z-10 shadow-xl ring-4 ring-white" : "hover:scale-105"}`}
+                  className={`aspect-square flex items-center justify-center transition-all ${
+                    isHighlighted
+                      ? "scale-125 z-10 drop-shadow-[0_0_8px_rgba(255,165,2,0.9)]"
+                      : "hover:scale-110"
+                  }`}
                 >
-                  {num}
+                  {/* PNG asset — number already baked into image */}
+                  <ResultBall number={num} size="lg" />
                 </button>
               );
             })}
@@ -624,7 +718,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
           <div className="flex items-center justify-between mb-4 gap-2">
             <button
               onClick={handleRandomBet}
-              className="border border-[#ff4757] text-[#ff4757] px-3 py-1.5 rounded-md text-xs font-bold hover:bg-[#ff4757]/10 transition-colors bg-white"
+              className="border border-[#ffa502] text-[#ffa502] px-3 py-1.5 rounded-md text-xs font-bold hover:bg-[#ffa502]/10 transition-colors bg-white"
             >
               Random
             </button>
@@ -692,29 +786,24 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
                       key={i}
                       className="grid grid-cols-[1.5fr_1fr_1fr_1fr] py-3 border-b border-white/5 text-xs text-center items-center hover:bg-white/5"
                     >
-                      <div className="flex justify-center items-center text-white">{row.period}</div>
-                      <div
-                        className={`flex justify-center items-center font-black text-lg ${
-                          row.color === "red"
-                            ? "text-red-500"
-                            : row.color === "green"
-                              ? "text-green-500"
-                              : "text-purple-500"
-                        }`}
-                      >
-                        {row.number}
-                      </div>
-                      <div className="flex justify-center items-center text-white">{row.size}</div>
+                      <div className="flex justify-center items-center text-white text-[10px] font-mono">{row.period}</div>
+                      {/* Number column — ResultBall with correct color split */}
                       <div className="flex justify-center items-center">
-                        <div
-                          className={`w-3 h-3 rounded-full ${
-                            row.color === "red"
-                              ? "bg-red-500"
-                              : row.color === "green"
-                                ? "bg-green-500"
-                                : "bg-purple-500"
-                          }`}
-                        ></div>
+                        <ResultBall number={row.number} size="md" />
+                      </div>
+                      {/* Big/Small column */}
+                      <div className="flex justify-center items-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          row.size === "Big" ? "bg-[#fba846]/20 text-[#fba846]" : "bg-[#5c9df5]/20 text-[#5c9df5]"
+                        }`}>{row.size}</span>
+                      </div>
+                      {/* Color column — ColorDot only, no number */}
+                      <div className="flex justify-center items-center">
+                        <ColorDot
+                          color={row.color as "red" | "green" | "violet"}
+                          number={row.number}
+                          sizePx={16}
+                        />
                       </div>
                     </div>
                   ))}
@@ -1149,8 +1238,14 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
         {/* Bet Modal */}
         {showBetModal && (
-          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
-            <div className="w-full max-w-md bg-white rounded-t-3xl overflow-hidden animate-in slide-in-from-bottom-full duration-300">
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowBetModal(false)}
+          >
+            <div
+              className="w-full max-w-md bg-white rounded-t-3xl overflow-hidden animate-in slide-in-from-bottom-full duration-300"
+              onClick={(e) => e.stopPropagation()}
+            >
               <div
                 className={`${getModalHeaderClass()} p-4 text-center rounded-b-[2rem] shadow-md relative`}
               >
@@ -1258,79 +1353,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
         )}
         {/* Result Popup */}
         {resultPopup && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-            <div className="bg-white rounded-2xl w-full max-w-sm overflow-hidden flex flex-col animate-in zoom-in-95 duration-300">
-              <div
-                className={`p-6 text-center ${resultPopup.isWin ? "bg-gradient-to-br from-[#2ed573] to-green-600" : "bg-gradient-to-br from-gray-500 to-gray-700"}`}
-              >
-                <h2 className="text-white text-3xl font-bold uppercase tracking-wider mb-2">
-                  {resultPopup.isWin ? "WINNER" : "SORRY"}
-                </h2>
-                <p className="text-white/80 font-medium">
-                  Period: {resultPopup.period}
-                </p>
-              </div>
-
-              <div className="p-6 bg-white text-center flex flex-col items-center">
-                <div className="flex gap-2 justify-center items-center mb-6">
-                  <span className="text-gray-500 font-medium">Result:</span>
-                  <div className="flex gap-1 items-center font-bold">
-                    <span className="text-gray-800 text-lg">
-                      {resultPopup.resultNumber}
-                    </span>
-                    <span
-                      className={
-                        resultPopup.resultColor === "red"
-                          ? "text-[#ff4757]"
-                          : resultPopup.resultColor === "green"
-                            ? "text-[#2ed573]"
-                            : "text-[#9c27b0]"
-                      }
-                    >
-                      {resultPopup.resultColor.charAt(0).toUpperCase() +
-                        resultPopup.resultColor.slice(1)}
-                    </span>
-                    <span
-                      className={
-                        resultPopup.resultSize === "Big"
-                          ? "text-[#fba846]"
-                          : "text-[#5c9df5]"
-                      }
-                    >
-                      {resultPopup.resultSize}
-                    </span>
-                  </div>
-                </div>
-
-                {resultPopup.isWin ? (
-                  <div className="flex flex-col items-center gap-1 mb-6">
-                    <span className="text-gray-500">Bonus</span>
-                    <span className="text-3xl font-bold text-[#2ed573]">
-                      +{resultPopup.winAmount.toFixed(2)}
-                    </span>
-                    <span className="text-sm text-gray-400">
-                      Profit: +
-                      {(resultPopup.winAmount - resultPopup.amount).toFixed(2)}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-1 mb-6">
-                    <span className="text-gray-500">Loss</span>
-                    <span className="text-3xl font-bold text-gray-500">
-                      -{resultPopup.amount.toFixed(2)}
-                    </span>
-                  </div>
-                )}
-
-                <button
-                  onClick={() => setResultPopup(null)}
-                  className="w-full bg-[#1A1A1D] text-white font-bold py-3 rounded-xl hover:bg-black transition-colors"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
+          <WinGoResultPopup bet={resultPopup} onClose={() => setResultPopup(null)} />
         )}
 
         {/* How To Play Popup */}

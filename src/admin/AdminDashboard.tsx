@@ -83,9 +83,9 @@ function AdminDashboardContent() {
   };
 
   return (
-    <div className="min-h-screen w-full flex flex-col lg:flex-row bg-[#0f172a] text-white">
+    <div className="min-h-screen w-full flex flex-col md:flex-row bg-[#141414] text-white">
       <Sidebar />
-      <main className="flex-1 min-h-screen overflow-auto pt-16 md:pt-0 lg:pt-0">
+      <main className="flex-1 min-h-screen overflow-auto pb-14 md:pb-0">
         {renderPage()}
       </main>
     </div>

@@ -1,16 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { supabase } from "../../lib/supabaseClient";
-import { Users, DollarSign, CreditCard, Wallet, Activity } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { adminSupabase } from "../../lib/adminSupabase";
+import { Users, DollarSign, CreditCard, Wallet } from "lucide-react";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
 
-interface StatCard {
-  title: string;
-  value: string | number;
-  icon: React.ReactNode;
-  unit?: string;
-}
-
-type DashboardStats = {
+type Stats = {
   totalUsers: number;
   pendingDeposits: number;
   pendingWithdrawals: number;
@@ -18,193 +13,139 @@ type DashboardStats = {
 };
 
 export function DashboardOverview() {
-  const [stats, setStats] = useState<DashboardStats>({
-    totalUsers: 0,
-    pendingDeposits: 0,
-    pendingWithdrawals: 0,
-    totalWalletBalance: 0,
+  const [stats, setStats] = useState<Stats>({
+    totalUsers: 0, pendingDeposits: 0, pendingWithdrawals: 0, totalWalletBalance: 0,
   });
+  const [revenueSeries, setRevenueSeries] = useState<{ day: string; revenue: number }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [revenueSeries, setRevenueSeries] = useState<Array<{ day: string; revenue: number }>>([]);
+
+  const fetchStats = async () => {
+    setError("");
+    try {
+      // Use adminSupabase (service_role) for all queries — same client as MemberManagement
+      // so Total Users and Total Balance are always in sync.
+      const [
+        { count: totalUsers },
+        { count: pendingWithdrawals },
+        { data: balanceRows },
+        { data: txRows },
+        { count: pendingDeposits },
+      ] = await Promise.all([
+        // Total Users: count all rows in public.users (matches MemberManagement)
+        adminSupabase.from("users").select("id", { count: "exact", head: true }),
+        adminSupabase.from("withdraw_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        // Total Balance: sum main_balance + game_balance from public.users (matches MemberManagement)
+        adminSupabase.from("users").select("main_balance, game_balance"),
+        adminSupabase.from("transactions").select("amount, created_at").eq("type", "deposit").eq("status", "completed").order("created_at", { ascending: true }).limit(50),
+        adminSupabase.from("transactions").select("id", { count: "exact", head: true }).eq("type", "deposit").eq("status", "pending"),
+      ]);
+
+      const totalWalletBalance = (balanceRows || []).reduce(
+        (sum, r) => sum + Number(r.main_balance || 0) + Number((r as any).game_balance || 0), 0
+      );
+
+      // Build 7-day revenue series
+      const grouped = new Map<string, number>();
+      (txRows || []).forEach((r: any) => {
+        const key = new Date(r.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        grouped.set(key, (grouped.get(key) || 0) + Number(r.amount || 0));
+      });
+      const series = Array.from(grouped.entries()).map(([day, revenue]) => ({ day, revenue }));
+      setRevenueSeries(series.length ? series.slice(-7) : [{ day: "Today", revenue: 0 }]);
+
+      setStats({
+        totalUsers: Number(totalUsers ?? 0),
+        pendingDeposits: Number(pendingDeposits ?? 0),
+        pendingWithdrawals: Number(pendingWithdrawals ?? 0),
+        totalWalletBalance,
+      });
+    } catch (err: any) {
+      setError("Unable to load dashboard stats. Please refresh.");
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchStats = async () => {
-      setLoading(true);
-      setError("");
+    void fetchStats();
 
-      try {
-        const isMissingTableError = (error: any) => ["42P01", "PGRST205"].includes(error?.code) || /table|relation/i.test(error?.message || "");
+    // Realtime: re-fetch whenever users or withdraw_requests change
+    const channel = adminSupabase
+      .channel("dashboard-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "users" }, fetchStats)
+      .on("postgres_changes", { event: "*", schema: "public", table: "withdraw_requests" }, fetchStats)
+      .on("postgres_changes", { event: "*", schema: "public", table: "transactions" }, fetchStats)
+      .subscribe();
 
-        const countRows = async (tables: string[], filters: Array<[string, string]> = []) => {
-          let lastError: any = null;
-          for (const tableName of tables) {
-            let query = supabase.from(tableName).select("id", { count: "exact", head: true });
-            filters.forEach(([column, value]) => {
-              query = query.eq(column, value);
-            });
-            const { count, error } = await query;
-            if (!error) {
-              return Number(count ?? 0);
-            }
-            lastError = error;
-            if (!isMissingTableError(error)) {
-              break;
-            }
-          }
-          return Number(lastError ? 0 : 0);
-        };
-
-        const [{ count: totalUsers }, pendingDeposits, pendingWithdrawals, walletsResult] = await Promise.all([
-          supabase.from("users").select("id", { count: "exact", head: true }),
-          countRows(["transactions", "deposits", "deposit_requests"], [["status", "pending"], ["type", "deposit"]]),
-          countRows(["withdraw_requests", "withdrawals", "transactions"], [["status", "pending"]]),
-          (async () => {
-            const candidates = ["wallets", "users"] as const;
-            for (const tableName of candidates) {
-              const { data, error } = await supabase.from(tableName).select("main_balance");
-              if (!error && Array.isArray(data)) {
-                return data.reduce((sum, row) => sum + Number(row?.main_balance || 0), 0);
-              }
-            }
-            return 0;
-          })(),
-        ]);
-
-        const { data: revenueData, error: revenueError } = await supabase
-          .from("transactions")
-          .select("amount, created_at")
-          .eq("type", "deposit")
-          .order("created_at", { ascending: true })
-          .limit(7);
-
-        if (!revenueError && Array.isArray(revenueData)) {
-          const grouped = new Map<string, number>();
-          revenueData.forEach((row: any) => {
-            const key = new Date(row.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-            grouped.set(key, (grouped.get(key) || 0) + Number(row.amount || 0));
-          });
-          const series = Array.from(grouped.entries()).map(([day, revenue]) => ({ day, revenue }));
-          setRevenueSeries(series.length ? series : [{ day: "Today", revenue: 0 }]);
-        }
-
-        setStats({
-          totalUsers: Number(totalUsers ?? 0),
-          pendingDeposits: Number(pendingDeposits ?? 0),
-          pendingWithdrawals: Number(pendingWithdrawals ?? 0),
-          totalWalletBalance: Number(walletsResult ?? 0),
-        });
-      } catch (err: any) {
-        console.error("Failed to load dashboard stats", err);
-        setError("Unable to load dashboard stats. Please refresh.");
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchStats();
+    return () => { void adminSupabase.removeChannel(channel); };
   }, []);
 
-  const statCards: StatCard[] = [
-    {
-      title: "Total Users",
-      value: stats.totalUsers,
-      icon: <Users className="w-6 h-6" />,
-    },
-    {
-      title: "Pending Deposits",
-      value: stats.pendingDeposits,
-      icon: <CreditCard className="w-6 h-6" />,
-    },
-    {
-      title: "Pending Withdrawals",
-      value: stats.pendingWithdrawals,
-      icon: <DollarSign className="w-6 h-6" />,
-    },
-    {
-      title: "Total Wallet Balance",
-      value: stats.totalWalletBalance,
-      icon: <Wallet className="w-6 h-6" />,
-      unit: "Rs",
-    },
-  ];
-
-  const formatNumber = (num: number, unit?: string): string => {
-    let value = "0";
-    if (num >= 1000000) {
-      value = (num / 1000000).toFixed(2) + "M";
-    } else if (num >= 1000) {
-      value = (num / 1000).toFixed(2) + "K";
-    } else {
-      value = num.toString();
-    }
-    return unit ? `${unit} ${value}` : value;
+  const fmt = (n: number, unit?: string) => {
+    const v = n >= 1_000_000 ? (n / 1_000_000).toFixed(2) + "M"
+            : n >= 1_000     ? (n / 1_000).toFixed(1) + "K"
+            : String(n);
+    return unit ? `${unit} ${v}` : v;
   };
+
+  const cards = [
+    { title: "Total Users",          value: stats.totalUsers,          icon: <Users className="w-6 h-6" /> },
+    { title: "Pending Deposits",     value: stats.pendingDeposits,     icon: <CreditCard className="w-6 h-6" /> },
+    { title: "Pending Withdrawals",  value: stats.pendingWithdrawals,  icon: <DollarSign className="w-6 h-6" /> },
+    { title: "Total Wallet Balance", value: stats.totalWalletBalance,  icon: <Wallet className="w-6 h-6" />, unit: "Rs" },
+  ];
 
   return (
     <div className="flex-1 overflow-auto">
-      <div className="p-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Dashboard Overview</h1>
-          <p className="text-gray-400">Real-time platform statistics and metrics</p>
+      <div className="p-4 md:p-8">
+        <div className="mb-6 md:mb-8">
+          <h1 className="text-2xl md:text-3xl font-bold text-white mb-1">Dashboard Overview</h1>
+          <p className="text-gray-400 text-sm">Real-time platform statistics</p>
         </div>
 
         {loading ? (
           <div className="rounded-xl border border-[#0f3460] bg-[#12131d] p-8 text-center text-gray-400">
-            Loading dashboard statistics...
+            Loading…
           </div>
+        ) : error ? (
+          <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-red-100">{error}</div>
         ) : (
           <>
-            {error ? (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-red-100">
-                {error}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
-                {statCards.map((stat, index) => (
-                  <div
-                    key={index}
-                    className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] hover:border-[#e94560] transition-all duration-300 hover:shadow-lg hover:shadow-red-500/20"
-                  >
-                    <div className="w-12 h-12 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center mb-4">
-                      <div className="text-white">{stat.icon}</div>
-                    </div>
-                    <h3 className="text-gray-400 text-sm font-medium mb-2">{stat.title}</h3>
-                    <div className="flex items-baseline justify-between">
-                      <span className="text-2xl font-bold text-white">
-                        {formatNumber(Number(stat.value), stat.unit)}
-                      </span>
-                    </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
+              {cards.map((c, i) => (
+                <div key={i} className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] hover:border-[#e94560] transition-all hover:shadow-lg hover:shadow-red-500/20">
+                  <div className="w-12 h-12 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center mb-4 text-white">
+                    {c.icon}
                   </div>
-                ))}
+                  <h3 className="text-gray-400 text-sm font-medium mb-2">{c.title}</h3>
+                  <span className="text-2xl font-bold text-white">{fmt(Number(c.value), c.unit)}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                <h2 className="text-white font-bold text-lg mb-6">Revenue Trend (7 Days)</h2>
+                <div className="h-64 bg-[#0f3460] rounded-lg p-4">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={revenueSeries}>
+                      <CartesianGrid stroke="#1e3a5f" strokeDasharray="3 3" />
+                      <XAxis dataKey="day" stroke="#94a3b8" />
+                      <YAxis stroke="#94a3b8" />
+                      <Tooltip />
+                      <Line type="monotone" dataKey="revenue" stroke="#e94560" strokeWidth={3} dot={{ r: 4 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
-            )}
+              <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
+                <h2 className="text-white font-bold text-lg mb-4">Activity Summary</h2>
+                <p className="text-gray-400 text-sm">Live data synced via Supabase Realtime. Stats update automatically on user/transaction changes.</p>
+              </div>
+            </div>
           </>
         )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h2 className="text-white font-bold text-lg mb-6">Revenue Trend (7 Days)</h2>
-            <div className="h-64 bg-[#0f3460] rounded-lg p-4">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={revenueSeries}>
-                  <CartesianGrid stroke="#1e3a5f" strokeDasharray="3 3" />
-                  <XAxis dataKey="day" stroke="#94a3b8" />
-                  <YAxis stroke="#94a3b8" />
-                  <Tooltip />
-                  <Line type="monotone" dataKey="revenue" stroke="#e94560" strokeWidth={3} dot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h2 className="text-white font-bold text-lg mb-6">Activity Summary</h2>
-            <p className="text-gray-400 text-sm">
-              Dashboard data is loaded from the database. Recent activities will appear here as game and transaction events are logged.
-            </p>
-          </div>
-        </div>
       </div>
     </div>
   );

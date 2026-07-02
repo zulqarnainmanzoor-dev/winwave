@@ -233,47 +233,30 @@ export default function WithdrawView({
       return;
     }
 
-    // Process withdrawal: deduct from DB first, then create request
+    // Process withdrawal via atomic RPC: inserts withdrawal_history + deducts balance in one transaction
     (async () => {
       try {
-        // 1. Deduct from DB atomically
-        const { data: userRow } = await supabase
-          .from('users')
-          .select('main_balance')
-          .eq('id', uid)
-          .maybeSingle();
+        const { data, error } = await (supabase.rpc as any)('submit_withdrawal', {
+          p_user_id:        uid,
+          p_amount:         withdrawVal,
+          p_method:         selectedPaymentMethod.toUpperCase(),
+          p_account_name:   activeWallet?.name || '',
+          p_account_number: activeWallet?.account || '',
+          p_remarks:        withdrawRemarks.trim() || null,
+        });
 
-        const currentBal = Number(userRow?.main_balance ?? 0);
-        if (withdrawVal > currentBal) {
-          alert('Insufficient balance.');
+        if (error || !data?.success) {
+          alert(data?.error || error?.message || 'Failed to process withdrawal.');
           return;
         }
 
-        const { error: deductErr } = await supabase
-          .from('users')
-          .update({ main_balance: parseFloat((currentBal - withdrawVal).toFixed(2)) })
-          .eq('id', uid);
-
-        if (deductErr) { alert('Failed to process withdrawal.'); return; }
+        // Update local balance state to reflect deduction
+        setBalance(mainWalletBalance - withdrawVal);
 
         setWithdrawCounts((prev) => ({
           ...prev,
           [selectedPaymentMethod]: prev[selectedPaymentMethod] + 1,
         }));
-
-        // 2. Insert withdraw_request
-        const requestId = `WD-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
-        await (supabase.from('withdraw_requests') as any).insert([{
-          id: requestId,
-          user_id: uid || null,
-          amount: withdrawVal,
-          bank_name: selectedPaymentMethod.toUpperCase(),
-          account_name: activeWallet?.name || null,
-          account_number: activeWallet?.account || null,
-          status: 'pending',
-          created_at: new Date().toISOString(),
-          reason: withdrawRemarks.trim(),
-        }]);
 
         setShowSuccessModal(true);
       } catch (e) {

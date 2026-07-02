@@ -1,105 +1,107 @@
-const crypto = require('crypto');
-const { createClient } = require('@supabase/supabase-js');
+// api/webhook/deposit.js
+// Webhook URL to register in PKPay dashboard: POST /api/webhook/deposit
+// PKPay sends: { merchant_id, out_trade_no, amount, status, user_id, sign, ... }
 
-const supabaseUrl = process.env.SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || '';
-const supabase = createClient(supabaseUrl, supabaseKey);
+import { createClient } from "@supabase/supabase-js";
+import crypto from "crypto";
 
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+const supabase = createClient(
+  process.env.SUPABASE_URL        || process.env.VITE_SUPABASE_URL,
+  process.env.SERVICE_ROLE_KEY    || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY
+);
 
-function verifySignature(payload, signature) {
-  if (!WEBHOOK_SECRET) return true;
+const WEBHOOK_SECRET    = process.env.Webhook_secret    || "";
+const PAYOUT_API_SECRET = process.env.Payout_API_secret || "";
+const PAY_IN_API_SECRET = process.env.Pay_in_API_secret || "";
+
+// PKPay signature: HMAC-SHA256 of sorted key=value (excluding 'sign' key)
+function verifyPKPaySignature(body) {
+  if (!WEBHOOK_SECRET && !PAY_IN_API_SECRET) return true; // skip in dev
+
+  const secret = WEBHOOK_SECRET || PAY_IN_API_SECRET;
+  const { sign, ...rest } = body;
+
+  const sorted = Object.keys(rest)
+    .sort()
+    .filter((k) => rest[k] !== undefined && rest[k] !== "")
+    .map((k) => `${k}=${rest[k]}`)
+    .join("&");
+
+  const expected = crypto
+    .createHmac("sha256", secret)
+    .update(sorted)
+    .digest("hex");
+
   try {
-    const expected = crypto.createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex');
-    if (!signature) return false;
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  } catch (e) {
+    return crypto.timingSafeEqual(
+      Buffer.from(expected.toLowerCase()),
+      Buffer.from((sign || "").toLowerCase())
+    );
+  } catch {
     return false;
   }
 }
 
-module.exports = async (req, res) => {
-  if (req.method !== 'POST') return res.status(405).end('Method Not Allowed');
+export default async function handler(req, res) {
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Method not allowed" });
 
-  try {
-    const raw = JSON.stringify(req.body || {});
-    const signature = req.headers['x-pkpay-signature'] || req.headers['x-signature'] || req.headers['signature'];
-
-    if (!verifySignature(raw, String(signature || ''))) {
-      console.error('Webhook signature invalid');
-      return res.status(401).json({ ok: false, error: 'Invalid signature' });
-    }
-
-    const payload = req.body || {};
-    const successStatuses = ['success', 'completed', '1', 'paid', 'approved'];
-
-    if (!payload.user_id || !payload.amount) {
-      return res.status(400).json({ ok: false, error: 'Missing user_id or amount' });
-    }
-
-    if (!successStatuses.includes((payload.status || '').toLowerCase())) {
-      return res.status(200).send('ORDER_NOT_SUCCESSFUL');
-    }
-
-    const userId = payload.user_id;
-    const amount = parseFloat(payload.amount);
-    if (isNaN(amount) || amount <= 0) {
-      return res.status(400).json({ ok: false, error: 'Invalid amount' });
-    }
-
-    const bonus = parseFloat((amount * 0.02).toFixed(2));
-    const totalCredited = amount + bonus;
-    // Wagering = deposit + 2% bonus (user must bet this much before withdrawing)
-    const newWageringRequired = totalCredited;
-
-    // 1. Fetch current user balances
-    const { data: user, error: fetchErr } = await supabase
-      .from('users')
-      .select('main_balance, wagering_required')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (fetchErr || !user) {
-      console.error('User fetch failed:', fetchErr);
-      return res.status(404).json({ ok: false, error: 'User not found' });
-    }
-
-    const currentBalance = parseFloat(user.main_balance ?? 0);
-    const currentWagering = parseFloat(user.wagering_required ?? 0);
-
-    // 2. Update main_balance and wagering_required
-    const { error: updateErr } = await supabase
-      .from('users')
-      .update({
-        main_balance: parseFloat((currentBalance + totalCredited).toFixed(2)),
-        wagering_required: parseFloat((currentWagering + newWageringRequired).toFixed(2)),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', userId);
-
-    if (updateErr) {
-      console.error('Balance update failed:', updateErr);
-      return res.status(500).json({ ok: false, error: 'Failed to update balance' });
-    }
-
-    // 3. Log transaction as completed
-    const { error: txErr } = await supabase.from('transactions').insert({
-      user_id: userId,
-      type: 'deposit',
-      amount,
-      bonus,
-      status: 'completed',
-      gateway_ref: payload.order_id || null,
-      created_at: new Date().toISOString(),
-    });
-
-    if (txErr) console.warn('Transaction log failed (non-fatal):', txErr.message);
-
-    console.log(`✅ Deposit credited: user=${userId} amount=${amount} bonus=${bonus} wagering_added=${newWageringRequired}`);
-    return res.status(200).send('SUCCESS');
-
-  } catch (err) {
-    console.error('Webhook handler error:', err);
-    return res.status(500).json({ ok: false, error: 'Internal Server Error' });
+  // 1. Verify PKPay HMAC-SHA256 signature
+  if (!verifyPKPaySignature(req.body)) {
+    console.warn("[webhook/deposit] Invalid signature");
+    return res.status(401).json({ error: "Invalid signature" });
   }
-};
+
+  const { user_id, out_trade_no, amount, status } = req.body;
+
+  // 2. Only process successful payments
+  if (status !== "success" && status !== "SUCCESS") {
+    return res.status(200).json({ received: true, processed: false, reason: "non-success status" });
+  }
+
+  if (!user_id || !amount || !out_trade_no)
+    return res.status(400).json({ error: "Missing required fields: user_id, amount, out_trade_no" });
+
+  const tx_ref = String(out_trade_no);
+
+  // 3. Idempotency pre-check — query deposit_history before touching balances
+  const { data: existing, error: checkError } = await supabase
+    .from("deposit_history")
+    .select("id")
+    .eq("gateway_ref", tx_ref)
+    .eq("status", "success")
+    .maybeSingle();
+
+  if (checkError) {
+    console.error("[webhook/deposit] Idempotency check failed:", checkError);
+    return res.status(500).json({ error: checkError.message });
+  }
+
+  if (existing) {
+    console.log(`[webhook/deposit] Skipping duplicate: ${tx_ref}`);
+    return res.status(200).json({ status: "ignored", message: "Transaction already processed" });
+  }
+
+  // 4. Atomic balance credit via RPC (handles race condition at DB level too)
+  console.log(`[webhook/deposit] Processing new deposit: ${tx_ref}`);
+
+  const { data, error } = await supabase.rpc("handle_gateway_deposit", {
+    p_user_id: user_id,
+    p_amount:  Number(amount),
+    p_tx_ref:  tx_ref,
+  });
+
+  if (error) {
+    console.error("[webhook/deposit] handle_gateway_deposit error:", error);
+    return res.status(500).json({ error: error.message });
+  }
+
+  // RPC returns { duplicate: true } if a concurrent request beat us to it
+  if (data?.duplicate) {
+    console.log(`[webhook/deposit] Skipping duplicate (race): ${tx_ref}`);
+    return res.status(200).json({ status: "ignored", message: "Transaction already processed" });
+  }
+
+  console.log(`[webhook/deposit] Deposit credited — tx: ${tx_ref}, amount: ${amount}`);
+  return res.status(200).json({ code: 0, msg: "success", data });
+}

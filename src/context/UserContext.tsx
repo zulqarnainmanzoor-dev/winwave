@@ -502,8 +502,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
           filter: `id=eq.${uid}`,
         },
         (payload) => {
-          if (payload.new) {
-            applyProfileData(payload.new as ProfileRow);
+          const row = payload.new as any;
+          if (row) {
+            applyProfileData(row as ProfileRow);
+            // Sync balances in real-time (deposit webhook credits these)
+            if (row.main_balance  != null) setMainWalletBalanceState(row.main_balance);
+            if (row.game_balance  != null) setThirdPartyWalletBalanceState(row.game_balance);
+            if (row.wagering_required  != null) setWageringRequired(row.wagering_required);
+            if (row.wagering_completed != null) setWageringCompleted(row.wagering_completed);
           }
         }
       )

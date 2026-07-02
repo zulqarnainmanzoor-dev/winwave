@@ -11,6 +11,7 @@ import { useLanguage } from './context/LanguageContext';
 
 // Components
 import ErrorBoundary from './components/ErrorBoundary';
+import { ModalProvider } from './components/GlobalModal';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import VipStatus from './components/VipStatus';
@@ -163,24 +164,26 @@ const App: React.FC = () => {
   if (isAdminPath) {
     return (
       <ErrorBoundary>
-        <div className="min-h-screen bg-[#0A0A0B] font-sans selection:bg-amber-500 selection:text-black">
-          <div className="w-full min-h-screen bg-gradient-to-b from-[#161618] to-[#0A0A0B] text-gray-100 relative overflow-x-hidden flex flex-col">
-            <Routes>
-              <Route path="/admin" element={<Navigate to="/admin/login" replace />} />
-              <Route path="/admin/login" element={<AdminLogin />} />
-              <Route path="/admin/:secretId" element={<AdminLogin />} />
-              <Route
-                path="/admin/dashboard"
-                element={
-                  <AdminRoute>
-                    <AdminPanel />
-                  </AdminRoute>
-                }
-              />
-              <Route path="*" element={<Navigate to="/admin/login" replace />} />
-            </Routes>
+        <ModalProvider>
+          <div className="min-h-screen bg-[#0A0A0B] font-sans selection:bg-amber-500 selection:text-black">
+            <div className="w-full min-h-screen bg-gradient-to-b from-[#161618] to-[#0A0A0B] text-gray-100 relative overflow-x-hidden flex flex-col">
+              <Routes>
+                <Route path="/admin" element={<Navigate to="/admin/login" replace />} />
+                <Route path="/admin/login" element={<AdminLogin />} />
+                <Route path="/admin/:secretId" element={<AdminLogin />} />
+                <Route
+                  path="/admin/dashboard"
+                  element={
+                    <AdminRoute>
+                      <AdminPanel />
+                    </AdminRoute>
+                  }
+                />
+                <Route path="*" element={<Navigate to="/admin/login" replace />} />
+              </Routes>
+            </div>
           </div>
-        </div>
+        </ModalProvider>
       </ErrorBoundary>
     );
   }
@@ -188,6 +191,7 @@ const App: React.FC = () => {
   // If not logged in, show auth view
   if (!isLoggedIn) {
     return (
+      <ModalProvider>
       <div className="min-h-screen bg-[#0A0A0B] flex justify-center font-sans selection:bg-amber-500 selection:text-black">
         <div className="w-full max-w-[450px] mx-auto min-h-screen bg-[#0c0f17] shadow-2xl relative overflow-x-hidden border-x border-white/5 flex flex-col">
           <Routes>
@@ -217,12 +221,14 @@ const App: React.FC = () => {
           </Routes>
         </div>
       </div>
+      </ModalProvider>
     );
   }
 
   // Logged-in user interface with Routes
   return (
     <ErrorBoundary>
+      <ModalProvider>
       <div className="min-h-screen bg-[#0A0A0B] flex justify-center font-sans selection:bg-amber-500 selection:text-black">
         <div
           className={`w-full ${isAdminDashboard ? 'max-w-full bg-gradient-to-b from-[#161618] to-[#0A0A0B]' : 'max-w-[450px] mx-auto bg-[#0c0f17] shadow-2xl relative'} text-gray-100 min-h-screen overflow-x-hidden border-x border-white/5 flex flex-col ${
@@ -371,6 +377,7 @@ const App: React.FC = () => {
           {shouldShowNav && <BottomNav activeTab={mainView} onTabChange={handleTabChange} />}
         </div>
       </div>
+      </ModalProvider>
     </ErrorBoundary>
   );
 };

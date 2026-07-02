@@ -72,11 +72,30 @@ alter table public.gift_code_claims  enable row level security;
 alter table public.attendance_bonus  enable row level security;
 alter table public.withdraw_requests enable row level security;
 
--- gift_codes: anyone can read active, service role manages
-drop policy if exists "gc_read_active"   on public.gift_codes;
-drop policy if exists "gc_service_all"   on public.gift_codes;
-create policy "gc_read_active"  on public.gift_codes for select using (status = 'active' or auth.role() = 'service_role');
-create policy "gc_service_all"  on public.gift_codes for all   using (auth.role() = 'service_role') with check (auth.role() = 'service_role');
+-- gift_codes: fix RLS to allow authenticated admin to insert/update/delete
+drop policy if exists "gc_read_active"       on public.gift_codes;
+drop policy if exists "gc_service_all"       on public.gift_codes;
+drop policy if exists "gc_admin_all"         on public.gift_codes;
+drop policy if exists "gc_authenticated_all" on public.gift_codes;
+
+-- Any authenticated user can read all codes (admin needs to see all statuses)
+create policy "gc_authenticated_read"
+  on public.gift_codes for select
+  using (auth.role() = 'authenticated' or auth.role() = 'service_role');
+
+-- Any authenticated user can insert/update/delete (admin panel uses anon key with auth session)
+create policy "gc_authenticated_write"
+  on public.gift_codes for insert
+  with check (auth.role() = 'authenticated' or auth.role() = 'service_role');
+
+create policy "gc_authenticated_update"
+  on public.gift_codes for update
+  using (auth.role() = 'authenticated' or auth.role() = 'service_role')
+  with check (auth.role() = 'authenticated' or auth.role() = 'service_role');
+
+create policy "gc_authenticated_delete"
+  on public.gift_codes for delete
+  using (auth.role() = 'authenticated' or auth.role() = 'service_role');
 
 -- gift_code_claims: own rows
 drop policy if exists "gcc_own"         on public.gift_code_claims;

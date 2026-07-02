@@ -120,12 +120,27 @@ useEffect(() => {
     setLoading(true);
 
     try {
-      // Email must match Supabase Auth format
       const email = `${normalizedPhone}@winwave.com`;
 
       if (mode === 'register') {
-        // Read inviter code from current state only — never from localStorage
         const inviterCode = inviteCode.trim() || null;
+
+        // ── Validate invite code exists in DB before signup ──────
+        if (inviterCode) {
+          const { count } = await supabase
+            .from('users')
+            .select('id', { count: 'exact', head: true })
+            .eq('invite_code', inviterCode);
+          if (!count) {
+            setError(
+              language === 'EN'
+                ? `Invite code "${inviterCode}" is invalid. Please check and try again.`
+                : `دعوت کوڈ "${inviterCode}" غلط ہے۔ دوبارہ چیک کریں۔`
+            );
+            setLoading(false);
+            return;
+          }
+        }
 
         const { data, error } = await supabase.auth.signUp({
           email,

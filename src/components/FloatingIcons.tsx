@@ -1,9 +1,14 @@
 const icons = [
-  { src: '/assets/gameCategories/roulette_icon.png', alt: 'Roulette' },
-  { src: '/assets/gameCategories/Crash.webp', alt: 'Crash' },
-  { src: '/assets/gameCategories/Fish.webp', alt: 'Fish' },
-  { src: '/assets/gameCategories/Slots.webp', alt: 'Slots' },
+  { src: '/assets/gameCategories/roulette_icon.png', alt: 'Roulette', orange: false },
+  { src: '/assets/gameCategories/Crash.webp',        alt: 'Crash',    orange: false },
+  { src: '/assets/gameCategories/Fish.webp',         alt: 'Fish',     orange: false },
+  { src: '/assets/gameCategories/Slots.webp',        alt: 'Slots',    orange: false },
+  { src: '/assets/svg/icon_sevice.png',              alt: 'Support',  orange: true  },
 ];
+
+// CSS filter to recolor any image to #ffa502 orange
+const ORANGE_FILTER =
+  'brightness(0) saturate(100%) invert(62%) sepia(97%) saturate(1200%) hue-rotate(1deg) brightness(103%) contrast(104%)';
 
 export default function FloatingIcons() {
   return (
@@ -19,9 +24,8 @@ export default function FloatingIcons() {
             src={item.src}
             alt={item.alt}
             className="w-full h-full object-cover"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-            }}
+            style={item.orange ? { filter: ORANGE_FILTER } : undefined}
+            onError={(e) => { e.currentTarget.style.display = 'none'; }}
           />
         </button>
       ))}

@@ -1,327 +1,316 @@
 import React, { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Save } from "lucide-react";
-import { supabase } from "../../lib/supabaseClient";
+import { Settings as SettingsIcon, Save, RotateCcw, DollarSign, Gamepad2, Shield, Bell } from "lucide-react";
+import { adminSupabase } from "../../lib/adminSupabase";
+
+const DEFAULTS = {
+  platformName: "WinWave",
+  maintenanceMode: false,
+  minWithdrawal: 1000,
+  maxWithdrawal: 500000,
+  withdrawalFee: 2.5,
+  depositBonus: 50,
+  referralCommission: 10,
+  maxBetPerRound: 500000,
+  minBetPerRound: 100,
+  platformMarginTarget: 8.5,
+  gameControlEnabled: true,
+  smartRiskDefault: false,
+  notificationsEnabled: true,
+  autoApproveDeposit: false,
+};
+
+function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none ${
+        checked ? "bg-orange-500" : "bg-[#2a2a2a]"
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${
+          checked ? "translate-x-6" : "translate-x-1"
+        }`}
+      />
+    </button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-gray-400 text-xs font-semibold uppercase tracking-wider mb-1.5">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function NumberInput({ value, onChange, step }: { value: number; onChange: (v: number) => void; step?: number }) {
+  return (
+    <input
+      type="number"
+      value={value}
+      step={step}
+      onChange={(e) => onChange(parseFloat(e.target.value))}
+      className="w-full bg-[#1a1a1a] border border-[#333] rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:border-orange-500 transition-colors"
+    />
+  );
+}
+
+function TextInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full bg-[#1a1a1a] border border-[#333] rounded-lg px-3 py-2.5 text-white text-sm focus:outline-none focus:border-orange-500 transition-colors"
+    />
+  );
+}
+
+function Card({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="bg-[#1c1c1c] rounded-xl border border-[#2a2a2a] p-5">
+      <h3 className="text-white font-bold text-sm mb-5 flex items-center gap-2 uppercase tracking-wider">
+        <span className="text-orange-500">{icon}</span>
+        {title}
+      </h3>
+      <div className="space-y-4">{children}</div>
+    </div>
+  );
+}
+
+function ToggleRow({ label, desc, checked, onChange }: { label: string; desc?: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div>
+        <p className="text-gray-200 text-sm font-medium">{label}</p>
+        {desc && <p className="text-gray-500 text-xs mt-0.5">{desc}</p>}
+      </div>
+      <Toggle checked={checked} onChange={onChange} />
+    </div>
+  );
+}
 
 export function Settings() {
-  const [settings, setSettings] = useState({
-    platformName: "WinWave",
-    maintenanceMode: false,
-    minWithdrawal: 1000,
-    maxWithdrawal: 500000,
-    withdrawalFee: 2.5,
-    depositBonus: 50,
-    referralCommission: 10,
-    maxBetPerRound: 500000,
-    minBetPerRound: 100,
-    platformMarginTarget: 8.5,
-    gameControlEnabled: true,
-    smartRiskDefault: false,
-    notificationsEnabled: true,
-    autoApproveDeposit: false,
-  });
-
+  const [settings, setSettings] = useState(DEFAULTS);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const set = (patch: Partial<typeof DEFAULTS>) => setSettings((s) => ({ ...s, ...patch }));
+
   useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const { data, error: fetchError } = await supabase
-          .from("platform_settings")
-          .select("*")
-          .maybeSingle();
+    const load = async () => {
+      const { data, error: e } = await adminSupabase
+        .from("platform_settings")
+        .select("*")
+        .eq("id", "default")
+        .maybeSingle();
 
-        if (fetchError) {
-          console.warn("Platform settings fetch failed", fetchError);
-          setLoading(false);
-          return;
-        }
-
-        if (data) {
-          setSettings({
-            platformName: data.platform_name || "WinWave",
-            maintenanceMode: Boolean(data.maintenance_mode ?? false),
-            minWithdrawal: Number(data.min_withdrawal ?? 1000),
-            maxWithdrawal: Number(data.max_withdrawal ?? 500000),
-            withdrawalFee: Number(data.withdrawal_fee ?? 2.5),
-            depositBonus: Number(data.deposit_bonus ?? 50),
-            referralCommission: Number(data.referral_commission ?? 10),
-            maxBetPerRound: Number(data.max_bet_per_round ?? 500000),
-            minBetPerRound: Number(data.min_bet_per_round ?? 100),
-            platformMarginTarget: Number(data.platform_margin_target ?? 8.5),
-            gameControlEnabled: Boolean(data.game_control_enabled ?? true),
-            smartRiskDefault: Boolean(data.smart_risk_default ?? false),
-            notificationsEnabled: Boolean(data.notifications_enabled ?? true),
-            autoApproveDeposit: Boolean(data.auto_approve_deposit ?? false),
-          });
-        }
-      } catch (err: any) {
-        console.warn("Platform settings load error", err);
-        setError(err?.message || "Unable to load platform settings.");
-      } finally {
-        setLoading(false);
+      if (!e && data) {
+        set({
+          platformName: data.platform_name ?? DEFAULTS.platformName,
+          maintenanceMode: Boolean(data.maintenance_mode ?? DEFAULTS.maintenanceMode),
+          minWithdrawal: Number(data.min_withdrawal ?? DEFAULTS.minWithdrawal),
+          maxWithdrawal: Number(data.max_withdrawal ?? DEFAULTS.maxWithdrawal),
+          withdrawalFee: Number(data.withdrawal_fee ?? DEFAULTS.withdrawalFee),
+          depositBonus: Number(data.deposit_bonus ?? DEFAULTS.depositBonus),
+          referralCommission: Number(data.referral_commission ?? DEFAULTS.referralCommission),
+          maxBetPerRound: Number(data.max_bet_per_round ?? DEFAULTS.maxBetPerRound),
+          minBetPerRound: Number(data.min_bet_per_round ?? DEFAULTS.minBetPerRound),
+          platformMarginTarget: Number(data.platform_margin_target ?? DEFAULTS.platformMarginTarget),
+          gameControlEnabled: Boolean(data.game_control_enabled ?? DEFAULTS.gameControlEnabled),
+          smartRiskDefault: Boolean(data.smart_risk_default ?? DEFAULTS.smartRiskDefault),
+          notificationsEnabled: Boolean(data.notifications_enabled ?? DEFAULTS.notificationsEnabled),
+          autoApproveDeposit: Boolean(data.auto_approve_deposit ?? DEFAULTS.autoApproveDeposit),
+        });
       }
+      setLoading(false);
     };
-
-    void loadSettings();
+    void load();
   }, []);
 
   const handleSave = async () => {
     setError(null);
+    setSaving(true);
     try {
-      const payload = {
-        id: "default",
-        platform_name: settings.platformName,
-        maintenance_mode: settings.maintenanceMode,
-        min_withdrawal: settings.minWithdrawal,
-        max_withdrawal: settings.maxWithdrawal,
-        withdrawal_fee: settings.withdrawalFee,
-        deposit_bonus: settings.depositBonus,
-        referral_commission: settings.referralCommission,
-        max_bet_per_round: settings.maxBetPerRound,
-        min_bet_per_round: settings.minBetPerRound,
-        platform_margin_target: settings.platformMarginTarget,
-        game_control_enabled: settings.gameControlEnabled,
-        smart_risk_default: settings.smartRiskDefault,
-        notifications_enabled: settings.notificationsEnabled,
-        auto_approve_deposit: settings.autoApproveDeposit,
-      };
-
-      const { error: upsertError } = await supabase.from("platform_settings").upsert(payload, { onConflict: "id" });
-      if (upsertError) throw upsertError;
-
+      const { error: e } = await adminSupabase.from("platform_settings").upsert(
+        {
+          id: "default",
+          platform_name: settings.platformName,
+          maintenance_mode: settings.maintenanceMode,
+          min_withdrawal: settings.minWithdrawal,
+          max_withdrawal: settings.maxWithdrawal,
+          withdrawal_fee: settings.withdrawalFee,
+          deposit_bonus: settings.depositBonus,
+          referral_commission: settings.referralCommission,
+          max_bet_per_round: settings.maxBetPerRound,
+          min_bet_per_round: settings.minBetPerRound,
+          platform_margin_target: settings.platformMarginTarget,
+          game_control_enabled: settings.gameControlEnabled,
+          smart_risk_default: settings.smartRiskDefault,
+          notifications_enabled: settings.notificationsEnabled,
+          auto_approve_deposit: settings.autoApproveDeposit,
+        },
+        { onConflict: "id" }
+      );
+      if (e) throw e;
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setTimeout(() => setSaved(false), 2500);
     } catch (err: any) {
-      console.error("Platform settings save failed", err);
-      setError(err?.message || "Unable to save platform settings.");
+      setError(err?.message || "Failed to save settings.");
+    } finally {
+      setSaving(false);
     }
   };
 
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-[#141414] min-h-screen">
+        <div className="text-gray-400 text-sm">Loading settings…</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex-1 overflow-auto">
-      <div className="p-8">
+    <div className="flex-1 bg-[#141414] min-h-screen">
+      <div className="p-6 max-w-5xl mx-auto">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Platform Settings</h1>
-          <p className="text-gray-400">Configure platform-wide settings and policies</p>
-        </div>
-
-        {error && <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{error}</div>}
-
-        <div className="grid grid-cols-2 gap-8">
-          {/* General Settings */}
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h3 className="text-white font-bold text-lg mb-6 flex items-center gap-2">
-              <SettingsIcon className="w-5 h-5" /> General Settings
-            </h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Platform Name</label>
-                <input
-                  type="text"
-                  value={settings.platformName}
-                  onChange={(e) => setSettings({ ...settings, platformName: e.target.value })}
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.maintenanceMode}
-                    onChange={(e) => setSettings({ ...settings, maintenanceMode: e.target.checked })}
-                    className="w-4 h-4 rounded cursor-pointer"
-                  />
-                  <span className="text-gray-300">Maintenance Mode (Block all users)</span>
-                </label>
-              </div>
-
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Deposit Bonus (%)</label>
-                <input
-                  type="number"
-                  value={settings.depositBonus}
-                  onChange={(e) => setSettings({ ...settings, depositBonus: parseFloat(e.target.value) })}
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Referral Commission (%)</label>
-                <input
-                  type="number"
-                  value={settings.referralCommission}
-                  onChange={(e) => setSettings({ ...settings, referralCommission: parseFloat(e.target.value) })}
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-            </div>
+        <div className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+              <SettingsIcon className="w-6 h-6 text-orange-500" /> Platform Settings
+            </h1>
+            <p className="text-gray-500 text-sm mt-1">Configure platform-wide settings and policies</p>
           </div>
-
-          {/* Financial Settings */}
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h3 className="text-white font-bold text-lg mb-6">Financial Settings</h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Min Withdrawal (Rs)</label>
-                <input
-                  type="number"
-                  value={settings.minWithdrawal}
-                  onChange={(e) => setSettings({ ...settings, minWithdrawal: parseInt(e.target.value) })}
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Max Withdrawal (Rs)</label>
-                <input
-                  type="number"
-                  value={settings.maxWithdrawal}
-                  onChange={(e) => setSettings({ ...settings, maxWithdrawal: parseInt(e.target.value) })}
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Withdrawal Fee (%)</label>
-                <input
-                  type="number"
-                  value={settings.withdrawalFee}
-                  onChange={(e) => setSettings({ ...settings, withdrawalFee: parseFloat(e.target.value) })}
-                  step="0.1"
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.autoApproveDeposit}
-                    onChange={(e) => setSettings({ ...settings, autoApproveDeposit: e.target.checked })}
-                    className="w-4 h-4 rounded cursor-pointer"
-                  />
-                  <span className="text-gray-300">Auto-approve deposits</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          {/* Game Settings */}
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h3 className="text-white font-bold text-lg mb-6">Game Settings</h3>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Min Bet Per Round (Rs)</label>
-                <input
-                  type="number"
-                  value={settings.minBetPerRound}
-                  onChange={(e) => setSettings({ ...settings, minBetPerRound: parseInt(e.target.value) })}
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Max Bet Per Round (Rs)</label>
-                <input
-                  type="number"
-                  value={settings.maxBetPerRound}
-                  onChange={(e) => setSettings({ ...settings, maxBetPerRound: parseInt(e.target.value) })}
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-gray-400 text-sm font-medium mb-2">Platform Margin Target (%)</label>
-                <input
-                  type="number"
-                  value={settings.platformMarginTarget}
-                  onChange={(e) => setSettings({ ...settings, platformMarginTarget: parseFloat(e.target.value) })}
-                  step="0.1"
-                  className="w-full bg-[#0f3460] border border-[#1a5f7a] rounded-lg px-4 py-2 text-white focus:outline-none focus:border-[#e94560]"
-                />
-              </div>
-
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.gameControlEnabled}
-                    onChange={(e) => setSettings({ ...settings, gameControlEnabled: e.target.checked })}
-                    className="w-4 h-4 rounded cursor-pointer"
-                  />
-                  <span className="text-gray-300">Enable Game Controller</span>
-                </label>
-              </div>
-
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.smartRiskDefault}
-                    onChange={(e) => setSettings({ ...settings, smartRiskDefault: e.target.checked })}
-                    className="w-4 h-4 rounded cursor-pointer"
-                  />
-                  <span className="text-gray-300">Enable Smart Risk by default</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          {/* Security Settings */}
-          <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460]">
-            <h3 className="text-white font-bold text-lg mb-6">Security Settings</h3>
-
-            <div className="space-y-4">
-
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.notificationsEnabled}
-                    onChange={(e) => setSettings({ ...settings, notificationsEnabled: e.target.checked })}
-                    className="w-4 h-4 rounded cursor-pointer"
-                  />
-                  <span className="text-gray-300">Enable push notifications</span>
-                </label>
-              </div>
-
-              <div className="bg-[#0f3460] rounded-lg p-4 mt-6">
-                <p className="text-gray-400 text-sm mb-2">API Key</p>
-                <p className="text-gray-300 font-mono text-xs break-all bg-[#1a1a2e] px-3 py-2 rounded">
-                </p>
-              </div>
-            </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() => setSettings(DEFAULTS)}
+              className="flex items-center gap-2 px-4 py-2 bg-[#1c1c1c] border border-[#2a2a2a] text-gray-400 rounded-lg hover:border-[#444] hover:text-white text-sm transition-all"
+            >
+              <RotateCcw className="w-4 h-4" /> Reset
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-2 px-5 py-2 bg-orange-500 hover:bg-orange-400 text-white rounded-lg font-semibold text-sm transition-all disabled:opacity-60 shadow-lg shadow-orange-500/20"
+            >
+              <Save className="w-4 h-4" />
+              {saving ? "Saving…" : "Save Settings"}
+            </button>
           </div>
         </div>
 
-        {/* Save Button */}
-        <div className="mt-8 flex justify-end gap-4">
-          <button className="px-6 py-3 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] hover:border-[#e94560] transition-all font-medium">
-            Reset to Defaults
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={loading}
-            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[#e94560] to-[#ff6b6b] text-white rounded-lg hover:shadow-lg hover:shadow-red-500/30 transition-all font-medium disabled:opacity-60"
-          >
-            <Save className="w-4 h-4" />
-            {loading ? "Loading..." : "Save Settings"}
-          </button>
-        </div>
-
-        {saved && (
-          <div className="fixed bottom-8 right-8 bg-[#4ade80] text-white px-6 py-3 rounded-lg shadow-lg">
-            ✓ Settings saved successfully
+        {error && (
+          <div className="mb-5 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+            {error}
           </div>
         )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* General */}
+          <Card title="General" icon={<SettingsIcon className="w-4 h-4" />}>
+            <Field label="Platform Name">
+              <TextInput value={settings.platformName} onChange={(v) => set({ platformName: v })} />
+            </Field>
+            <Field label="Deposit Bonus (%)">
+              <NumberInput value={settings.depositBonus} onChange={(v) => set({ depositBonus: v })} step={0.5} />
+            </Field>
+            <Field label="Referral Commission (%)">
+              <NumberInput value={settings.referralCommission} onChange={(v) => set({ referralCommission: v })} step={0.5} />
+            </Field>
+            <ToggleRow
+              label="Maintenance Mode"
+              desc="Blocks all users from accessing the platform"
+              checked={settings.maintenanceMode}
+              onChange={(v) => set({ maintenanceMode: v })}
+            />
+          </Card>
+
+          {/* Financial */}
+          <Card title="Financial" icon={<DollarSign className="w-4 h-4" />}>
+            <Field label="Min Withdrawal (Rs)">
+              <NumberInput value={settings.minWithdrawal} onChange={(v) => set({ minWithdrawal: v })} />
+            </Field>
+            <Field label="Max Withdrawal (Rs)">
+              <NumberInput value={settings.maxWithdrawal} onChange={(v) => set({ maxWithdrawal: v })} />
+            </Field>
+            <Field label="Withdrawal Fee (%)">
+              <NumberInput value={settings.withdrawalFee} onChange={(v) => set({ withdrawalFee: v })} step={0.1} />
+            </Field>
+            <ToggleRow
+              label="Auto-approve Deposits"
+              desc="Automatically approve incoming deposits"
+              checked={settings.autoApproveDeposit}
+              onChange={(v) => set({ autoApproveDeposit: v })}
+            />
+          </Card>
+
+          {/* Game */}
+          <Card title="Game Settings" icon={<Gamepad2 className="w-4 h-4" />}>
+            <Field label="Min Bet Per Round (Rs)">
+              <NumberInput value={settings.minBetPerRound} onChange={(v) => set({ minBetPerRound: v })} />
+            </Field>
+            <Field label="Max Bet Per Round (Rs)">
+              <NumberInput value={settings.maxBetPerRound} onChange={(v) => set({ maxBetPerRound: v })} />
+            </Field>
+            <Field label="Platform Margin Target (%)">
+              <NumberInput value={settings.platformMarginTarget} onChange={(v) => set({ platformMarginTarget: v })} step={0.1} />
+            </Field>
+            <ToggleRow
+              label="Game Controller"
+              desc="Enable admin game outcome control"
+              checked={settings.gameControlEnabled}
+              onChange={(v) => set({ gameControlEnabled: v })}
+            />
+            <ToggleRow
+              label="Smart Risk (default on)"
+              desc="Enable smart risk management by default"
+              checked={settings.smartRiskDefault}
+              onChange={(v) => set({ smartRiskDefault: v })}
+            />
+          </Card>
+
+          {/* Security & Notifications */}
+          <Card title="Security & Notifications" icon={<Shield className="w-4 h-4" />}>
+            <ToggleRow
+              label="Push Notifications"
+              desc="Send push notifications to users"
+              checked={settings.notificationsEnabled}
+              onChange={(v) => set({ notificationsEnabled: v })}
+            />
+            <div className="pt-2 border-t border-[#2a2a2a]">
+              <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <Bell className="w-3 h-3" /> Current Values Summary
+              </p>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {[
+                  ["Platform", settings.platformName],
+                  ["Deposit Bonus", `${settings.depositBonus}%`],
+                  ["Referral", `${settings.referralCommission}%`],
+                  ["Withdrawal Fee", `${settings.withdrawalFee}%`],
+                  ["Min Bet", `Rs ${settings.minBetPerRound.toLocaleString()}`],
+                  ["Max Bet", `Rs ${settings.maxBetPerRound.toLocaleString()}`],
+                ].map(([k, v]) => (
+                  <div key={k} className="bg-[#1a1a1a] rounded-lg px-3 py-2">
+                    <p className="text-gray-500">{k}</p>
+                    <p className="text-orange-400 font-semibold truncate">{v}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
+
+      {saved && (
+        <div className="fixed bottom-6 right-6 bg-orange-500 text-white px-5 py-3 rounded-xl shadow-xl shadow-orange-500/30 text-sm font-semibold flex items-center gap-2 animate-fade-in">
+          ✓ Settings saved successfully
+        </div>
+      )}
     </div>
   );
 }
