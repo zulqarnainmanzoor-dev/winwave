@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from "path";
 import express from "express";
 import { createServer as createViteServer } from "vite";
+import { startWinGoEngine, stopWinGoEngine } from "./backend/game-engine/wingoEngine.js";
 
 const envPath = path.join(process.cwd(), '.env');
 const envExamplePath = path.join(process.cwd(), '.env.example');
@@ -23,6 +24,11 @@ async function startServer() {
 
   // API Routes
   app.use("/api", apiRouter);
+
+  // ── 24/7 WinGo game engine ────────────────────────────────────
+  startWinGoEngine();
+  process.on("SIGTERM", () => { stopWinGoEngine(); process.exit(0); });
+  process.on("SIGINT",  () => { stopWinGoEngine(); process.exit(0); });
 
   // Always return JSON on internal API errors so the frontend does not fail parsing
   app.use((err: any, req: any, res: any, next: any) => {

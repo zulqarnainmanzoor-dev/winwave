@@ -125,21 +125,28 @@ useEffect(() => {
       if (mode === 'register') {
         const inviterCode = inviteCode.trim() || null;
 
-        // ── Validate invite code exists in DB before signup ──────
+        // ── Resolve invite code → referrer UUID BEFORE signUp ────
+        // UUID is passed in metadata so the trigger uses it directly,
+        // eliminating any race condition in code→UUID resolution.
+        let referrerUuid: string | null = null;
         if (inviterCode) {
-          const { count } = await supabase
+          const normalizedCode = inviterCode.trim().toUpperCase();
+          const { data: referrerRow, error: refErr } = await supabase
             .from('users')
-            .select('id', { count: 'exact', head: true })
-            .eq('invite_code', inviterCode);
-          if (!count) {
+            .select('id')
+            .eq('invite_code', normalizedCode)
+            .maybeSingle();
+
+          if (refErr || !referrerRow?.id) {
             setError(
               language === 'EN'
-                ? `Invite code "${inviterCode}" is invalid. Please check and try again.`
-                : `دعوت کوڈ "${inviterCode}" غلط ہے۔ دوبارہ چیک کریں۔`
+                ? `Invite code "${normalizedCode}" is invalid. Please check and try again.`
+                : `\u062f\u0639\u0648\u062a \u06a9\u0648\u0688 "${normalizedCode}" \u063a\u0644\u0637 \u06c1\u06d2\u06d4 \u062f\u0648\u0628\u0627\u0631\u06c1 \u0686\u06cc\u06a9 \u06a9\u0631\u06cc\u06ba\u06d4`
             );
             setLoading(false);
             return;
           }
+          referrerUuid = referrerRow.id;
         }
 
         const { data, error } = await supabase.auth.signUp({
@@ -148,7 +155,8 @@ useEffect(() => {
           options: {
             data: {
               phone_number: normalizedPhone,
-              inviter_code: inviterCode,   // picked up by handle_new_user trigger
+              inviter_code:  inviterCode ? inviterCode.trim().toUpperCase() : null,
+              referrer_uuid: referrerUuid,
             }
           }
         });

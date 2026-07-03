@@ -569,7 +569,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       wageringCompleted, setWageringCompleted,
       addWageringProgress,
       addDepositWithBonus,
-      referralCode,
       referralCount,
       totalCommissions,
       setTotalCommissions,

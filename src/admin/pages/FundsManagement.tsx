@@ -42,6 +42,21 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
   const [acting, setActing]               = useState(false);
   const [error, setError]                 = useState("");
 
+  // ── Realtime subscription for live withdrawal updates ──────────
+  useEffect(() => {
+    if (type !== "withdraw") return;
+    const channel = adminSupabase
+      .channel("admin-withdrawals-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "withdrawal_history" },
+        () => { void fetchRequests(); }
+      )
+      .subscribe();
+    return () => { void adminSupabase.removeChannel(channel); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type]);
+
   const fetchRequests = async () => {
     setLoading(true); setError(""); setSelected(null);
     try {
@@ -131,62 +146,40 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
     setActing(true); setError("");
     try {
       if (selected.type === "withdraw") {
-        // ── Step 1: Mark as 'approved' so it can't be double-processed
-        const { error: approveErr } = await adminSupabase
-          .from("withdrawal_history")
-          .update({ status: "approved", updated_at: new Date().toISOString() })
-          .eq("id", selected.id)
-          .eq("status", "pending");
+        // ── Step 1: pending → processing via RPC (deducts balance atomically)
+        const { data: approveData, error: approveErr } = await adminSupabase
+          .rpc("approve_withdrawal", { p_withdrawal_id: selected.id });
         if (approveErr) throw approveErr;
+        if (!approveData?.ok) throw new Error(approveData?.error || "Approve failed");
 
         // ── Step 2: Call PKPay Payout API
-        let gatewayRef: string | null = null;
-        let gatewaySuccess = false;
         try {
           const payoutRes = await fetch("/api/payout", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              withdrawal_id: selected.id,
+              withdrawal_id:  selected.id,   // used as out_trade_no
               amount:         selected.amount,
-              method:         selected.method,   // JAZZCASH | EASYPAISA
+              method:         selected.method,
               account_number: selected.account_number,
               account_name:   selected.account_name,
             }),
           });
           const payoutData = await payoutRes.json();
-          if (payoutRes.ok && payoutData.success) {
-            gatewaySuccess = true;
-            gatewayRef = payoutData.gateway_ref ?? null;
-          } else {
+          if (!payoutRes.ok || !payoutData.success) {
             throw new Error(payoutData.error || "Payout API failed");
           }
+          // PKPay accepted — status will move to 'completed' via webhook callback
         } catch (gatewayErr: any) {
-          // ── Step 3a: Gateway failed — refund via RPC
+          // Gateway rejected synchronously — refund immediately
           await adminSupabase.rpc("fail_withdrawal", {
             p_withdrawal_id: selected.id,
             p_reason: gatewayErr?.message || "Gateway error",
           });
-          setError(`Gateway failed: ${gatewayErr?.message}. Balance refunded to user.`);
+          setError(`Gateway failed: ${gatewayErr?.message}. Balance refunded.`);
           await fetchRequests();
           return;
         }
-
-        // ── Step 3b: Gateway succeeded — mark completed
-        await adminSupabase.rpc("approve_withdrawal", {
-          p_withdrawal_id: selected.id,
-          p_gateway_ref:   gatewayRef,
-        });
-
-        // Log to transactions for user history
-        await adminSupabase.from("transactions").insert({
-          user_id:     selected.userId,
-          type:        "withdraw",
-          amount:      selected.amount,
-          status:      "completed",
-          gateway_ref: gatewayRef || `Paid to ${selected.account_number}`,
-          created_at:  new Date().toISOString(),
-        });
 
       } else {
         // ── Deposit approval (manual) ─────────────────────────────

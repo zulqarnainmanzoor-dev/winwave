@@ -179,6 +179,10 @@ BEGIN
         v_num   := v_num % 5;
         v_size  := 'Small';
         v_color := CASE WHEN v_num = 0 THEN 'violet' WHEN v_num % 2 = 0 THEN 'red' ELSE 'green' END;
+      ELSIF v_forced LIKE 'NUM:%' THEN
+        v_num   := SUBSTRING(v_forced FROM 5)::INT;
+        v_size  := CASE WHEN v_num >= 5 THEN 'Big' ELSE 'Small' END;
+        v_color := CASE WHEN v_num IN (0,5) THEN 'violet' WHEN v_num % 2 = 0 THEN 'red' ELSE 'green' END;
       END IF;
 
       UPDATE public.game_rounds
@@ -188,19 +192,23 @@ BEGIN
     END LOOP;
 
     -- b) Create next active round if none exists
+    -- round_num = floor(secs/interval) — NO +1, matches client JS exactly
+    -- ends_at   = UTC day start + (round_num + 1) * interval
     IF NOT EXISTS (
       SELECT 1 FROM public.game_rounds
       WHERE game_type = 'wingo' AND mode = v_mode AND status = 'active'
     ) THEN
-      v_round_num := (v_secs / v_interval) + 1;
+      v_round_num := v_secs / v_interval;  -- integer division, no +1
       v_period    := v_date_str || v_prefix || LPAD(v_round_num::TEXT, 5, '0');
-      v_ends_at   := DATE_TRUNC('day', v_now)
-                   + ((v_round_num * v_interval) || ' seconds')::INTERVAL;
+      -- ends_at = start of UTC day + (round_num + 1) * interval seconds
+      v_ends_at   := DATE_TRUNC('day', v_now AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                   + (((v_round_num + 1) * v_interval) || ' seconds')::INTERVAL;
 
       INSERT INTO public.game_rounds (game_type, mode, period, started_at, ends_at, status)
       VALUES ('wingo', v_mode, v_period, NOW(), v_ends_at, 'active')
       ON CONFLICT (period) DO NOTHING;
     END IF;
+
   END LOOP;
 END;
 $$;

@@ -5,12 +5,23 @@
 }
 
 @layer utilities {
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
-  }
-  .scrollbar-hide {
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+  /* WinGo header — center all content */
+  .wingo-header { display: flex; justify-content: center; align-items: center; }
+
+  /* Hide headphone notification dot */
+  .headphone-icon-dot { display: none !important; }
+
+  /* Game History top selection balls — 20% larger with spacing */
+  .top-selection-balls {
+    transform: scale(1.2);
+    transform-origin: center;
+    margin: 0 4px;
+    display: inline-flex;
   }
 }
 

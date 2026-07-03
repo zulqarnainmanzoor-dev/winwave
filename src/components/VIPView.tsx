@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useUser, VIP_TIERS } from "../context/UserContext";
 import { VipBadgeImage } from "./VipBadgeImage";
+import { supabase } from "../lib/supabase";
 
 export default function VIPView({
   initialLevel,
@@ -19,35 +20,50 @@ export default function VIPView({
   initialLevel?: number;
   onBack: () => void;
 }) {
-  const { cumulativeWager, vipLevel, balance, setBalance } = useUser();
+  const { cumulativeWager, vipLevel, uid, refreshUserData } = useUser();
   const [selectedLevel, setSelectedLevel] = useState<number>(0);
+  const [claimingLevel, setClaimingLevel] = useState<number | null>(null);
+  const [claimedRewards, setClaimedRewards] = useState<Record<number, boolean>>({});
 
-  // Set initial level on mount
   useEffect(() => {
-    if (initialLevel !== undefined) {
-      setSelectedLevel(initialLevel);
-    } else {
-      setSelectedLevel(vipLevel);
-    }
+    setSelectedLevel(initialLevel !== undefined ? initialLevel : vipLevel);
   }, [initialLevel, vipLevel]);
 
-  // Track claimed level-up rewards in localStorage
-  const [claimedRewards, setClaimedRewards] = useState<Record<number, boolean>>(() => {
-    const saved = localStorage.getItem("claimed_vip_rewards");
-    return saved ? JSON.parse(saved) : {};
-  });
+  // Load claimed levels from DB on mount
+  useEffect(() => {
+    if (!uid) return;
+    supabase
+      .from('users')
+      .select('vip_levelup_claimed')
+      .eq('id', uid)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.vip_levelup_claimed) {
+          const map: Record<number, boolean> = {};
+          (data.vip_levelup_claimed as number[]).forEach(l => { map[l] = true; });
+          setClaimedRewards(map);
+        }
+      });
+  }, [uid]);
 
-  const handleClaimReward = (level: number) => {
-    if (vipLevel < level) return;
-    if (claimedRewards[level]) return;
-
-    const rewardAmount = VIP_TIERS[level].levelUpReward;
-    setBalance(balance + rewardAmount);
-
-    const updated = { ...claimedRewards, [level]: true };
-    setClaimedRewards(updated);
-    localStorage.setItem("claimed_vip_rewards", JSON.stringify(updated));
-    alert(`Congratulations! You have claimed your VIP ${level} Level Up Reward of Rs ${rewardAmount.toLocaleString()}`);
+  const handleClaimReward = async (level: number) => {
+    if (vipLevel < level || claimedRewards[level] || claimingLevel !== null) return;
+    setClaimingLevel(level);
+    try {
+      const { data, error } = await (supabase.rpc as any)('claim_vip_levelup_reward', {
+        p_user_id: uid,
+        p_level: level,
+      });
+      if (error || !data?.success) {
+        alert(data?.error || error?.message || 'Claim failed');
+        return;
+      }
+      setClaimedRewards(prev => ({ ...prev, [level]: true }));
+      await refreshUserData();
+      alert(`Congratulations! VIP ${level} Level Up Reward of Rs ${VIP_TIERS[level].levelUpReward.toLocaleString()} credited!`);
+    } finally {
+      setClaimingLevel(null);
+    }
   };
 
   // Helper to format currency
@@ -298,7 +314,7 @@ export default function VIPView({
                     <button
                       id={`vip-claim-btn-${selectedLevel}`}
                       onClick={() => handleClaimReward(selectedLevel)}
-                      disabled={vipLevel < selectedLevel || claimedRewards[selectedLevel]}
+                      disabled={vipLevel < selectedLevel || claimedRewards[selectedLevel] || claimingLevel === selectedLevel}
                       className={`w-full py-2.5 rounded-full font-black text-sm tracking-wide transition-all ${
                         claimedRewards[selectedLevel]
                           ? "bg-[#0A0A0B] text-gray-500 border border-white/5 cursor-not-allowed"
@@ -307,7 +323,7 @@ export default function VIPView({
                           : "bg-white/5 text-gray-500 border border-white/5 cursor-not-allowed"
                       }`}
                     >
-                      {claimedRewards[selectedLevel] ? "Claimed" : "Receive"}
+                      {claimingLevel === selectedLevel ? "Claiming..." : claimedRewards[selectedLevel] ? "Claimed" : "Receive"}
                     </button>
                   </div>
                 </>

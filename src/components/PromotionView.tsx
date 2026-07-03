@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import {
   Users,
@@ -30,12 +30,42 @@ export default function PromotionView() {
   const {
     uid,
     referralCode,
-    referralCount,
     totalCommissions,
     setTotalCommissions,
     balance,
     setBalance
   } = useUser();
+
+  const [networkStats, setNetworkStats] = useState({
+    direct_count: 0,
+    team_count: 0,
+    direct_deposit_users: 0,
+    team_deposit_users: 0,
+    direct_deposit_amount: 0,
+    team_deposit_amount: 0,
+  });
+
+  useEffect(() => {
+    if (!uid) return;
+    (supabase.rpc as any)('get_network_stats', { user_uuid: uid })
+      .then(({ data }: any) => {
+        if (data?.[0]) {
+          const row = data[0];
+          setNetworkStats({
+            direct_count:          Number(row.direct_count          ?? 0),
+            team_count:            Number(row.team_count            ?? 0),
+            direct_deposit_users:  Number(row.direct_deposit_users  ?? 0),
+            team_deposit_users:    Number(row.team_deposit_users    ?? 0),
+            direct_deposit_amount: Number(row.direct_deposit_amount ?? 0),
+            team_deposit_amount:   Number(row.team_deposit_amount   ?? 0),
+          });
+        }
+      });
+    (supabase.rpc as any)('get_referral_stats', { p_user_id: uid })
+      .then(({ data }: any) => {
+        if (data?.[0]) setTotalCommissions(Number(data[0].total_commission ?? 0));
+      });
+  }, [uid]);
 
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
@@ -295,31 +325,30 @@ export default function PromotionView() {
                 </div>
               </div>
 
-              {/* Grid content */}
-              <div className="grid grid-cols-2 p-4 text-center divide-x divide-white/5">
+                <div className="grid grid-cols-2 p-4 text-center divide-x divide-white/5">
                 {/* Direct Invitees Col */}
                 <div className="space-y-4 pr-2">
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={referralCount} decimals={0} />
+                      <AnimatedCounter value={networkStats.direct_count} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Registered Users</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-[#ffa502] block">
-                      <AnimatedCounter value={0} decimals={0} />
+                      <AnimatedCounter value={networkStats.direct_deposit_users} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Users</span>
                   </div>
                   <div>
                     <span className="text-base font-black text-white block">
-                      <AnimatedCounter value={0} prefix="Rs " />
+                      <AnimatedCounter value={networkStats.direct_deposit_amount} prefix="Rs " />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Amount</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={0} decimals={0} />
+                      <AnimatedCounter value={networkStats.direct_deposit_users} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">First Deposit Users</span>
                   </div>
@@ -329,25 +358,25 @@ export default function PromotionView() {
                 <div className="space-y-4 pl-2">
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={0} decimals={0} />
+                      <AnimatedCounter value={networkStats.team_count} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Registered Users</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-[#ffa502] block">
-                      <AnimatedCounter value={0} decimals={0} />
+                      <AnimatedCounter value={networkStats.team_deposit_users} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Users</span>
                   </div>
                   <div>
                     <span className="text-base font-black text-white block">
-                      <AnimatedCounter value={0} prefix="Rs " />
+                      <AnimatedCounter value={networkStats.team_deposit_amount} prefix="Rs " />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Amount</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={0} decimals={0} />
+                      <AnimatedCounter value={networkStats.team_deposit_users} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">First Deposit Users</span>
                   </div>
@@ -375,13 +404,13 @@ export default function PromotionView() {
               <div className="border-t border-white/5 pt-4 grid grid-cols-2 text-center divide-x divide-white/5">
                 <div>
                   <span className="text-xl font-black text-white block">
-                    <AnimatedCounter value={referralCount} decimals={0} />
+                    <AnimatedCounter value={networkStats.direct_count} decimals={0} />
                   </span>
                   <span className="text-[10px] font-bold text-gray-500 block uppercase mt-1">Direct Invitees</span>
                 </div>
                 <div>
                   <span className="text-xl font-black text-white block">
-                    <AnimatedCounter value={0} decimals={0} />
+                    <AnimatedCounter value={networkStats.team_count} decimals={0} />
                   </span>
                   <span className="text-[10px] font-bold text-gray-500 block uppercase mt-1">Team Invitees</span>
                 </div>
@@ -588,12 +617,12 @@ export default function PromotionView() {
                   <p className="text-xs text-gray-400">Detailed breakdown of total active referrers in your downstream network levels.</p>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-[#1C1C1E] border border-white/5 rounded-2xl p-4 text-center">
-                      <span className="text-2xl font-black text-white block">{referralCount}</span>
+                      <span className="text-2xl font-black text-white block">{networkStats.direct_count}</span>
                       <span className="text-[10px] font-bold text-gray-500 block uppercase mt-1">Direct Referrals</span>
                     </div>
                     <div className="bg-[#1C1C1E] border border-white/5 rounded-2xl p-4 text-center">
-                      <span className="text-2xl font-black text-white block">0</span>
-                      <span className="text-[10px] font-bold text-gray-500 block uppercase mt-1">Sub Referrals</span>
+                      <span className="text-2xl font-black text-white block">{networkStats.team_count}</span>
+                      <span className="text-[10px] font-bold text-gray-500 block uppercase mt-1">Team Referrals</span>
                     </div>
                   </div>
                 </div>

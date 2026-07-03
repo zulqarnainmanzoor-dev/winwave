@@ -5,6 +5,7 @@ import membersRouter from './members';
 import webhookHandler from './webhook';
 import walletRouter from './wallet';
 import withdrawRouter from './withdraw';
+import wingoRouter from './wingo';
 import { getDeviceContext, logSecurityEvent } from './security';
 
 const router = Router();
@@ -14,6 +15,7 @@ router.use('/members', membersRouter);
 router.post('/webhook/deposit', webhookHandler);
 router.use('/wallet', walletRouter);
 router.use('/withdraw', withdrawRouter);
+router.use('/wingo', wingoRouter);
 
 router.post('/login', async (req, res) => {
   const { phone, password } = req.body;

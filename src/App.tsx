@@ -35,6 +35,7 @@ import GameStatistics from './components/GameStatistics';
 import TransactionView from './components/TransactionView';
 import DepositView from './components/DepositView';
 import DepositHistoryView from './components/DepositHistoryView';
+import WithdrawHistoryView from './components/WithdrawHistoryView';
 import WithdrawView from './components/WithdrawView';
 import VIPView from './components/VIPView';
 import NoticeView from './components/NoticeView';
@@ -292,10 +293,12 @@ const App: React.FC = () => {
                     />
                   ) : currentView === 'deposit-history' ? (
                     <DepositHistoryView onBack={() => setCurrentView('deposit')} />
+                  ) : currentView === 'withdraw-history' ? (
+                    <WithdrawHistoryView onBack={() => setCurrentView('withdraw')} />
                   ) : currentView === 'withdraw' ? (
                     <WithdrawView
                       onBack={() => setCurrentView('account')}
-                      onTransactionClick={() => setCurrentView('transaction')}
+                      onTransactionClick={() => setCurrentView('withdraw-history')}
                     />
                   ) : currentView === 'statistics' ? (
                     <GameStatistics onBack={() => setCurrentView('account')} />

