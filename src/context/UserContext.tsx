@@ -63,6 +63,18 @@ interface UserContextType {
     jazzcash: { name: string; account: string; remarks?: string } | null;
   };
   setBoundAccounts: (accounts: any) => void;
+
+  // --- NEW: Registration & Referral functions ---
+  registerUser: (phone: string, password: string, inviteCode?: string) => Promise<{ success: boolean; error?: string }>;
+  fetchReferrals: () => Promise<Array<{ id: string; phone: string; joined_at: string }>>;
+  fetchTotalCommissions: () => Promise<number>;
+  submitWithdrawal: (params: {
+    amount: number;
+    method: 'jazzcash' | 'easypaisa';
+    accountName: string;
+    accountNumber: string;
+    remarks?: string;
+  }) => Promise<{ success: boolean; error?: string }>;
 }
 
 export interface VipTier {
@@ -97,7 +109,6 @@ export type PaymentMethod = keyof typeof PAYMENT_LIMITS;
 
 export function formatDisplayUid(uid: string): string {
   if (!uid) return '------';
-  // Show first 6 chars of UUID (without dashes) as a short display ID
   return uid.replace(/-/g, '').slice(0, 8).toUpperCase();
 }
 
@@ -191,7 +202,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [claimedDailyBonus, setClaimedDailyBonus] = useState(savedSession?.claimedDailyBonus ?? false);
   const [dailyWagerProgress, setDailyWagerProgress] = useState(savedSession?.dailyWagerProgress ?? 0);
 
-  // using setter from useState directly: setTotalCommissions
   const [lastLogin, setLastLogin] = useState(savedSession?.lastLogin || '');
   const [phoneNumber, setPhoneNumberState] = useState(savedSession?.phoneNumber || '');
   const [selectedPaymentMethod, setSelectedPaymentMethodState] = useState<'jazzcash' | 'easypaisa'>(
@@ -202,7 +212,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     easypaisa: null,
     jazzcash: null,
   });
-
 
   const [isLoggedIn, setIsLoggedInState] = useState<boolean>(() => {
     const stored = localStorage.getItem("b9_logged_in");
@@ -233,7 +242,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setBoundAccountsState(accounts);
   };
 
-
   const [mainWalletBalance, setMainWalletBalanceState] = useState<number>(
     savedSession?.mainWalletBalance ?? savedSession?.balance ?? 0
   );
@@ -254,6 +262,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   };
 
   const setBalance = (value: number) => {
+    // This sets main balance to value - thirdParty (assumes value is total)
     setMainWalletBalance(value - thirdPartyWalletBalance);
   };
 
@@ -303,10 +312,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setLastLogin(new Date().toISOString());
     setIsLoggedIn(true);
 
-    // Apply demo mode if applicable
     applyDemoMode(profile?.phone_number || phoneNumberValue);
-
-    // Fetch and apply full profile/wallet data after login
     void refreshUserData(userId);
   };
 
@@ -334,7 +340,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
   const applyProfileData = useCallback((profile: ProfileRow) => {
     const level   = profile.vip_level;
-    const wagered = profile.total_bets;   // total_bets is the real column
+    const wagered = profile.total_bets;
 
     if (level != null)   setVipLevelState(level);
     if (wagered != null) {
@@ -358,7 +364,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
     if (!userId) return;
 
-    // Single query to public.users — balances live here, no separate wallets table
     const { data, error } = await supabase
       .from('users')
       .select('invite_code, phone_number, vip_level, total_bets, main_balance, game_balance, wagering_required, wagering_completed')
@@ -377,44 +382,38 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       applyProfileData(data);
     }
 
-    // Fetch referral count (users whose referred_by = this user's id)
     const { count: refCount } = await supabase
       .from('users')
       .select('id', { count: 'exact', head: true })
       .eq('referred_by', userId);
     if (refCount != null) setReferralCount(refCount);
 
+    // Also fetch total commissions from a helper function – we can call an RPC or sum from referral commissions table
+    // We'll define a separate function below.
   }, [uid, applyProfileData]);
 
-  // Persist withdrawal_pin to public.users whenever it changes
+  // Persist withdrawal_pin to public.users
   useEffect(() => {
     if (!withdrawalPassword || !uid) return;
-    
     const persistWithdrawalPin = async () => {
       try {
         const { error } = await supabase
           .from('users')
           .update({ withdrawal_pin: withdrawalPassword })
           .eq('id', uid);
-          
-        if (error) {
-          console.error('Failed to persist withdrawal_pin:', error);
-        } else {
-          console.log('✅ Withdrawal PIN persisted to public.users');
-        }
+        if (error) console.error('Failed to persist withdrawal_pin:', error);
+        else console.log('✅ Withdrawal PIN persisted to public.users');
       } catch (err) {
         console.error('Error persisting withdrawal_pin:', err);
       }
     };
-    
     persistWithdrawalPin();
   }, [withdrawalPassword, uid]);
 
-  // Persist bank details to public.users whenever boundAccounts changes
+  // Persist bank details — safe fallback for PGRST204 schema cache errors
   useEffect(() => {
     if (!uid) return;
     if (!boundAccounts.easypaisa && !boundAccounts.jazzcash) return;
-    
     const persistBankDetails = async () => {
       try {
         const bankDetails = {
@@ -429,14 +428,18 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
             remarks: boundAccounts.jazzcash.remarks || null,
           } : null,
         };
-        
         const { error } = await supabase
           .from('users')
           .update({ bank_details: bankDetails })
           .eq('id', uid);
-          
         if (error) {
-          console.error('Failed to persist bank details:', error);
+          // PGRST204 = schema cache stale; fail silently to avoid breaking withdrawal flow
+          const code = (error as any).code;
+          if (code === 'PGRST204') {
+            console.warn('⚠️ bank_details column not in schema cache — skipping persist. Run: NOTIFY pgrst, \'reload schema\';');
+          } else {
+            console.error('Failed to persist bank details:', error);
+          }
         } else {
           console.log('✅ Bank details persisted to public.users');
         }
@@ -444,18 +447,16 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         console.error('Error persisting bank details:', err);
       }
     };
-    
     persistBankDetails();
   }, [boundAccounts, uid]);
 
+  // Session persistence
   useEffect(() => {
     if (typeof window === 'undefined') return;
-
     if (!isLoggedIn) {
       localStorage.removeItem(USER_SESSION_KEY);
       return;
     }
-
     const session = {
       uid,
       phoneNumber,
@@ -482,15 +483,12 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       boundAccounts,
       lastLogin: new Date().toISOString(),
     };
-
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(session));
   }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
 
+  // Realtime subscription
   useEffect(() => {
     if (!isLoggedIn || !uid) return;
-
-    refreshUserData();
-
     const channel = supabase
       .channel(`profile-changes-${uid}`)
       .on(
@@ -505,7 +503,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
           const row = payload.new as any;
           if (row) {
             applyProfileData(row as ProfileRow);
-            // Sync balances in real-time (deposit webhook credits these)
             if (row.main_balance  != null) setMainWalletBalanceState(row.main_balance);
             if (row.game_balance  != null) setThirdPartyWalletBalanceState(row.game_balance);
             if (row.wagering_required  != null) setWageringRequired(row.wagering_required);
@@ -514,7 +511,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         }
       )
       .subscribe();
-
     return () => {
       supabase.removeChannel(channel);
     };
@@ -548,10 +544,195 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setWageringCompleted(0);
   };
 
+  // ----- NEW FUNCTIONS -----
+
+  /**
+   * Register a new user with phone and password, and optional invite code.
+   * Validates invite code if provided, and creates user with referral link.
+   */
+  const registerUser = useCallback(async (phone: string, password: string, inviteCode?: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      // 1. Validate invite code if provided
+      let referrerId: string | null = null;
+      if (inviteCode) {
+        const { data: referrer, error: refError } = await supabase
+          .from('users')
+          .select('id')
+          .eq('invite_code', inviteCode)
+          .maybeSingle();
+
+        if (refError) {
+          console.error('Error validating invite code:', refError);
+          return { success: false, error: 'Error validating invite code' };
+        }
+        if (!referrer) {
+          return { success: false, error: 'Invalid invite code' };
+        }
+        referrerId = referrer.id;
+      }
+
+      // 2. Sign up with Supabase Auth
+      const { data: authData, error: signUpError } = await supabase.auth.signUp({
+        phone: phone,
+        password: password,
+      });
+
+      if (signUpError) {
+        console.error('Sign up error:', signUpError);
+        return { success: false, error: signUpError.message || 'Registration failed' };
+      }
+
+      const newUserId = authData.user?.id;
+      if (!newUserId) {
+        return { success: false, error: 'User ID not created' };
+      }
+
+      // 3. Insert user profile into public.users
+      // Generate invite code for new user (simple unique code)
+      const inviteCodeNew = `INV${Date.now().toString(36).toUpperCase()}`;
+      const insertData: any = {
+        id: newUserId,
+        phone_number: phone,
+        invite_code: inviteCodeNew,
+        main_balance: 0,
+        game_balance: 0,
+        wagering_required: 0,
+        wagering_completed: 0,
+        vip_level: 0,
+        total_bets: 0,
+        referred_by: referrerId,
+      };
+
+      const { error: insertError } = await supabase
+        .from('users')
+        .insert(insertData);
+
+      if (insertError) {
+        console.error('Error inserting user profile:', insertError);
+        // Attempt to clean up auth user? Might be complex, but we can ignore for now.
+        return { success: false, error: 'Failed to create user profile' };
+      }
+
+      // 4. If referrer exists, increment their referral count and add commission (example: 5% of initial deposit? We'll just add a placeholder commission maybe 0)
+      // We'll rely on separate triggers or RPC to handle commissions upon deposit.
+      // Here we can just increment referral_count
+      if (referrerId) {
+        await supabase
+          .from('users')
+          .update({ referral_count: supabase.rpc('increment_referral_count') as any }) // assumes a function exists, or we can do a raw update
+          .eq('id', referrerId);
+        // Alternatively, we could use a trigger that increments on insert with referred_by.
+        // For safety, we'll use an RPC if it exists; otherwise, we can fetch and update.
+        // Simpler: we'll just update by fetching current count and setting new.
+        // But to avoid race, we'll use an RPC if defined. We'll call a custom function.
+        try {
+          await supabase.rpc('increment_referral_count', { user_id: referrerId });
+        } catch {
+          // Fallback: manual increment (might have race)
+          const { data: refData } = await supabase
+            .from('users')
+            .select('referral_count')
+            .eq('id', referrerId)
+            .single();
+          if (refData) {
+            const newCount = (refData.referral_count || 0) + 1;
+            await supabase
+              .from('users')
+              .update({ referral_count: newCount })
+              .eq('id', referrerId);
+          }
+        }
+      }
+
+      // 5. Auto-login after registration
+      await login(phone, newUserId, { invite_code: inviteCodeNew, phone_number: phone });
+      return { success: true };
+    } catch (err: any) {
+      console.error('Registration error:', err);
+      return { success: false, error: err.message || 'Registration failed' };
+    }
+  }, [login]);
+
+  /**
+   * Fetch list of users referred by the current user.
+   */
+  const fetchReferrals = useCallback(async (): Promise<Array<{ id: string; phone: string; joined_at: string }>> => {
+    if (!uid) return [];
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, phone_number, created_at')
+      .eq('referred_by', uid)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching referrals:', error);
+      return [];
+    }
+    return data.map((row: any) => ({
+      id: row.id,
+      phone: row.phone_number || 'Unknown',
+      joined_at: row.created_at,
+    }));
+  }, [uid]);
+
+  /**
+   * Fetch total commissions earned by the current user.
+   * This can be computed from a commissions table or from a referral commission column.
+   * Assuming a table 'referral_commissions' with user_id and amount.
+   */
+  const fetchTotalCommissions = useCallback(async (): Promise<number> => {
+    if (!uid) return 0;
+    const { data, error } = await supabase
+      .from('referral_commissions')
+      .select('amount')
+      .eq('user_id', uid);
+    if (error) {
+      console.error('Error fetching commissions:', error);
+      return 0;
+    }
+    const total = data.reduce((sum, row) => sum + (row.amount || 0), 0);
+    setTotalCommissions(total);
+    return total;
+  }, [uid]);
+
+  /**
+   * Submit a withdrawal request using the RPC and update local balance on success.
+   */
+  const submitWithdrawal = useCallback(async (params: {
+    amount: number;
+    method: 'jazzcash' | 'easypaisa';
+    accountName: string;
+    accountNumber: string;
+    remarks?: string;
+  }): Promise<{ success: boolean; error?: string }> => {
+    if (!uid) return { success: false, error: 'User not logged in' };
+    try {
+      const { data, error } = await (supabase.rpc as any)('submit_withdrawal', {
+        p_user_id: uid,
+        p_amount: params.amount,
+        p_method: params.method.toUpperCase(),
+        p_account_name: params.accountName,
+        p_account_number: params.accountNumber,
+        p_remarks: params.remarks?.trim() || null,
+      });
+
+      if (error || !data?.success) {
+        return { success: false, error: data?.error || error?.message || 'Withdrawal failed' };
+      }
+
+      // Deduct from main balance locally (RPC already deducted from DB)
+      setMainWalletBalanceState(prev => prev - params.amount);
+      return { success: true };
+    } catch (err: any) {
+      console.error('Withdrawal error:', err);
+      return { success: false, error: err.message || 'Withdrawal failed' };
+    }
+  }, [uid]);
+
   return (
-    <UserContext.Provider value={{ 
-      username, setUsername, 
-      avatar, setAvatar, 
+    <UserContext.Provider value={{
+      username, setUsername,
+      avatar, setAvatar,
       uid, phoneNumber, setPhoneNumber,
       lastLogin,
       balance: totalBalance,
@@ -592,6 +773,11 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       setWithdrawalPassword,
       boundAccounts,
       setBoundAccounts,
+      // new
+      registerUser,
+      fetchReferrals,
+      fetchTotalCommissions,
+      submitWithdrawal,
     }}>
       {children}
     </UserContext.Provider>

@@ -1,25 +1,13 @@
 import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { supabase } from "../../lib/supabaseClient";
+import { adminSupabase } from "../../lib/adminSupabase";
 
 interface HistoryPageProps {
   historyType: "game" | "recharge" | "bet" | "withdraw";
 }
 
-interface HistoryRow {
-  id: string;
-  user_id: string;
-  invite_code: string;
-  phone: string;
-  amount: number;
-  status: string;
-  method: string;
-  reference: string;
-  created_at: string;
-}
-
 export function HistoryPage({ historyType }: HistoryPageProps) {
-  const [rows, setRows]       = useState<HistoryRow[]>([]);
+  const [rows, setRows]       = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo]     = useState("");
@@ -35,37 +23,106 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
   const fetchData = async () => {
     setLoading(true);
     try {
+      const sb = adminSupabase as any;
       let rawRows: any[] = [];
 
-      if (historyType === "recharge" || historyType === "bet" || historyType === "game") {
-        const txType = historyType === "recharge" ? "deposit" : "withdraw";
-        let q = supabase
-          .from("transactions")
-          .select("id, user_id, amount, status, gateway_ref, created_at, type")
-          .order("created_at", { ascending: false })
-          .limit(200);
+      // Strict table isolation per history type
+      switch (historyType) {
+        case "withdraw":
+          // STRICTLY query the 'withdrawal_history' table
+          // Display: User ID, Amount, Timestamp, Order No, Gateway Provider, Status, Admin Remarks
+          let q = sb
+            .from("withdrawal_history")
+            .select("id, user_id, amount, method, account_number, account_name, status, gateway_ref, reason, remarks, created_at")
+            .order("created_at", { ascending: false })
+            .limit(200);
+          if (statusFilter !== "all") q = q.eq("status", statusFilter);
+          if (dateFrom) q = q.gte("created_at", new Date(dateFrom).toISOString());
+          if (dateTo) q = q.lte("created_at", new Date(dateTo + "T23:59:59").toISOString());
+          const { data: wData } = await q;
+          rawRows = (wData || []).map((r: any) => ({
+            ...r,
+            reference: r.gateway_ref || r.id,
+            method: r.method || "—",
+          }));
+          break;
 
-        if (historyType === "recharge") q = q.eq("type", "deposit");
-        if (historyType === "bet")      q = q.eq("type", "withdraw");
+        case "bet":
+          // STRICTLY query the WinGo game betting transaction schema (betting_history)
+          // Display: UID, Period Token, Amount, User Pick (Big/Small/Number), and Game Outcome
+          let bq = sb
+            .from("betting_history")
+            .select("id, user_id, amount, period, bet_type, bet_value, payout, status, created_at, game_round:round_id (result_number, result_size, result_color)")
+            .order("created_at", { ascending: false })
+            .limit(200);
+          if (statusFilter !== "all") bq = bq.eq("status", statusFilter);
+          if (dateFrom) bq = bq.gte("created_at", new Date(dateFrom).toISOString());
+          if (dateTo) bq = bq.lte("created_at", new Date(dateTo + "T23:59:59").toISOString());
+          const { data: bData } = await bq;
+          rawRows = (bData || []).map((r: any) => ({
+            id: r.id,
+            user_id: r.user_id,
+            amount: r.amount,
+            status: r.status,
+            created_at: r.created_at,
+            // Flatten bet selection
+            method: r.bet_type === "size" ? (r.bet_value === "Big" ? "Big" : "Small") : (r.bet_value ? `Number ${r.bet_value}` : "—"),
+            // Flatten game outcome
+            reference: r.game_round ? `Result: ${r.game_round.result_number ?? "—"} ${r.game_round.result_size ?? ""} ${r.game_round.result_color ?? ""}`.trim() : "—",
+          }));
+          break;
 
-        const { data, error } = await q;
-        if (error) throw error;
-        rawRows = data || [];
-      } else {
-        // withdraw history
-        const { data, error } = await (supabase.from("withdraw_requests") as any)
-          .select("id, user_id, amount, status, bank_name, account_number, created_at")
-          .order("created_at", { ascending: false })
-          .limit(200);
-        if (error) throw error;
-        rawRows = data || [];
+        case "game":
+          // STRICTLY query global round results data logs (game_rounds)
+          let gq = sb
+            .from("game_rounds")
+            .select("id, period, game_type, mode, result_number, result_size, result_color, total_big, total_small, status, started_at, ends_at, created_at")
+            .eq("game_type", "wingo")
+            .order("created_at", { ascending: false })
+            .limit(200);
+          if (statusFilter !== "all") gq = gq.eq("status", statusFilter);
+          if (dateFrom) gq = gq.gte("created_at", new Date(dateFrom).toISOString());
+          if (dateTo) gq = gq.lte("created_at", new Date(dateTo + "T23:59:59").toISOString());
+          const { data: gData } = await gq;
+          rawRows = (gData || []).map((r: any) => ({
+            id: r.id,
+            user_id: "—",
+            amount: r.total_big + r.total_small,
+            status: r.status,
+            created_at: r.created_at,
+            method: `${r.mode} · ${r.game_type}`,
+            reference: r.period,
+          }));
+          break;
+
+        case "recharge":
+          // STRICTLY query the internal 'deposits' system records table
+          let dq = sb
+            .from("deposits")
+            .select("id, user_id, amount, bonus, method, status, gateway_ref, created_at")
+            .order("created_at", { ascending: false })
+            .limit(200);
+          if (statusFilter !== "all") dq = dq.eq("status", statusFilter);
+          if (dateFrom) dq = dq.gte("created_at", new Date(dateFrom).toISOString());
+          if (dateTo) dq = dq.lte("created_at", new Date(dateTo + "T23:59:59").toISOString());
+          const { data: dData } = await dq;
+          rawRows = (dData || []).map((r: any) => ({
+            id: r.id,
+            user_id: r.user_id,
+            amount: r.amount,
+            status: r.status,
+            created_at: r.created_at,
+            method: r.method || "Gateway",
+            reference: r.gateway_ref || r.id,
+          }));
+          break;
       }
 
       // Enrich with user info
       const userIds = [...new Set(rawRows.map((r: any) => r.user_id).filter(Boolean))];
-      let userMap: Record<string, { invite_code: string; phone: string }> = {};
+      const userMap: Record<string, { invite_code: string; phone: string }> = {};
       if (userIds.length > 0) {
-        const { data: users } = await supabase
+        const { data: users } = await sb
           .from("users")
           .select("id, invite_code, phone_number")
           .in("id", userIds);
@@ -74,25 +131,19 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
         });
       }
 
-      const enriched: HistoryRow[] = rawRows.map((r: any) => ({
+      const enriched = rawRows.map((r: any) => ({
         id:          r.id,
         user_id:     r.user_id,
         invite_code: userMap[r.user_id]?.invite_code || "—",
         phone:       userMap[r.user_id]?.phone || "—",
         amount:      Number(r.amount ?? 0),
         status:      r.status || "—",
-        method:      r.bank_name || r.gateway_ref || r.type || "—",
-        reference:   r.gateway_ref || r.account_number || r.id,
+        method:      r.method || "—",
+        reference:   r.reference || "—",
         created_at:  r.created_at || "",
       }));
 
-      // Apply filters
-      let filtered = enriched;
-      if (statusFilter !== "all") filtered = filtered.filter(r => r.status === statusFilter);
-      if (dateFrom) filtered = filtered.filter(r => new Date(r.created_at) >= new Date(dateFrom));
-      if (dateTo)   filtered = filtered.filter(r => new Date(r.created_at) <= new Date(dateTo + "T23:59:59"));
-
-      setRows(filtered);
+      setRows(enriched);
     } catch (err: any) {
       console.error("HistoryPage fetch error:", err);
     } finally {
@@ -168,9 +219,9 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
                   <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">UID</th>
                   <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">Phone</th>
                   <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">Amount</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">Method</th>
+                  <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">Method / Selection</th>
                   <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">Status</th>
-                  <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">Reference</th>
+                  <th className="text-left text-gray-400 font-semibold py-3 px-4 text-xs uppercase">Reference / Outcome</th>
                 </tr>
               </thead>
               <tbody>
@@ -191,7 +242,7 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
                           {row.status}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-gray-500 text-xs font-mono truncate max-w-[120px]">{row.reference}</td>
+                      <td className="py-3 px-4 text-gray-500 text-xs font-mono truncate max-w-[200px]">{row.reference}</td>
                     </tr>
                   ))
                 )}

@@ -57,12 +57,16 @@ export function AgentManagement() {
   const [mobileTab, setMobileTab]         = useState<"search" | "details">("search");
   // Mobile: collapsible agent list
   const [agentListOpen, setAgentListOpen] = useState(false);
+  // Agent Fraud Analysis
+  const [fraudResult, setFraudResult]     = useState<any>(null);
+  const [fraudLoading, setFraudLoading]   = useState(false);
+  const [showFraudModal, setShowFraudModal] = useState(false);
 
   useEffect(() => {
     const fetchAgents = async () => {
       setAgentsLoading(true);
       try {
-        const { data, error } = await adminSupabase
+        const { data, error } = await (adminSupabase as any)
           .from("users")
           .select("id, phone_number, invite_code, main_balance, game_balance, created_at, is_agent")
           .eq("is_agent", true)
@@ -95,7 +99,7 @@ export function AgentManagement() {
       const isPhone      = /^\d{10,11}$/.test(trimmed);
       const isInviteCode = /^\d{6}$/.test(trimmed);
 
-      let q = adminSupabase
+      let q = (adminSupabase as any)
         .from("users")
         .select("id, phone_number, invite_code, main_balance, game_balance, vip_level, created_at, is_agent");
 
@@ -106,27 +110,28 @@ export function AgentManagement() {
 
       const { data, error: fetchErr } = await q.maybeSingle();
       if (fetchErr || !data) { setError("User not found. Try phone, 6-digit invite code, or UUID."); return; }
+      const user = data as any;
 
       // Count direct members via referred_by
-      const { count: directCount } = await adminSupabase
+      const { count: directCount } = await (adminSupabase as any)
         .from("users")
         .select("id", { count: "exact", head: true })
-        .eq("referred_by", data.id);
+        .eq("referred_by", user.id);
 
       setAgentData({
-        id:                   data.id,
-        phone:                data.phone_number || "",
-        main_balance:         Number(data.main_balance ?? 0),
-        game_balance:         Number(data.game_balance ?? 0),
-        vip_level:            data.vip_level || 0,
-        invite_code:          data.invite_code || "",
+        id:                   user.id,
+        phone:                user.phone_number || "",
+        main_balance:         Number(user.main_balance ?? 0),
+        game_balance:         Number(user.game_balance ?? 0),
+        vip_level:            user.vip_level || 0,
+        invite_code:          user.invite_code || "",
         total_bets:           0,
-        created_at:           data.created_at || "",
+        created_at:           user.created_at || "",
         direct_members:       Number(directCount ?? 0),
         team_members:         0,
         yesterday_commission: 0,
         status:               "active",
-        is_agent:             Boolean(data.is_agent),
+        is_agent:             Boolean(user.is_agent),
       });
       setMobileTab("details");
     } catch {
@@ -147,7 +152,7 @@ export function AgentManagement() {
     if (!agentData) return;
     setConverting(true);
     try {
-      const { error } = await adminSupabase.from("users").update({ is_agent: true }).eq("id", agentData.id);
+      const { error } = await (adminSupabase as any).from("users").update({ is_agent: true }).eq("id", agentData.id);
       if (error) throw error;
       setAgentData({ ...agentData, is_agent: true });
       setAgents(prev => {
@@ -164,15 +169,33 @@ export function AgentManagement() {
   const handleGiveSalary = async () => {
     if (!agentData || !salaryAmount) return;
     const newBal = agentData.main_balance + parseFloat(salaryAmount);
-    const { error } = await adminSupabase.from("users").update({ main_balance: newBal }).eq("id", agentData.id);
+    const { error } = await (adminSupabase as any).from("users").update({ main_balance: newBal }).eq("id", agentData.id);
     if (!error) { setAgentData({ ...agentData, main_balance: newBal }); setSalaryAmount(""); setShowSalaryModal(false); }
   };
 
   const handleGiveAdvance = async () => {
     if (!agentData || !advanceAmount) return;
     const newBal = agentData.game_balance + parseFloat(advanceAmount);
-    const { error } = await adminSupabase.from("users").update({ game_balance: newBal }).eq("id", agentData.id);
+    const { error } = await (adminSupabase as any).from("users").update({ game_balance: newBal }).eq("id", agentData.id);
     if (!error) { setAgentData({ ...agentData, game_balance: newBal }); setAdvanceAmount(""); setShowAdvanceModal(false); }
+  };
+
+  // ── Agent Fraud Network Analysis ─────────────────────────────────
+  const handleAnalyzeFraud = async () => {
+    if (!agentData) return;
+    setFraudLoading(true); setFraudResult(null);
+    try {
+      const { data, error } = await (adminSupabase as any).rpc("analyze_agent_network_fraud", {
+        p_agent_id: agentData.id,
+      });
+      if (error) throw error;
+      setFraudResult(data);
+      setShowFraudModal(true);
+    } catch (err: any) {
+      alert("Fraud analysis failed: " + (err?.message || "Unknown error"));
+    } finally {
+      setFraudLoading(false);
+    }
   };
 
   // ── Shared: Agent Details content ────────────────────────────────
@@ -239,6 +262,12 @@ export function AgentManagement() {
             ? { background: "rgba(16,185,129,0.1)", color: "#6ee7b7", borderColor: "rgba(16,185,129,0.4)", cursor: "default" }
             : { background: "rgba(16,185,129,0.15)", color: "#34d399", borderColor: "rgba(16,185,129,0.5)" }}>
           {converting ? "Converting..." : agentData.is_agent ? "✓ Already an Agent" : "⚡ Convert to Agent"}
+        </button>
+
+        {/* Agent Fraud Analysis Button */}
+        <button onClick={handleAnalyzeFraud} disabled={fraudLoading}
+          className="w-full py-3 bg-gradient-to-r from-red-500/20 to-orange-500/20 text-red-400 border border-red-500/40 rounded-lg font-bold text-sm hover:bg-red-500/30 disabled:opacity-50 min-h-[44px] mt-3">
+          {fraudLoading ? "🔍 Analyzing Network..." : "🛡️ Analyze Agent Fraud Network"}
         </button>
       </div>
     </div>
@@ -375,6 +404,51 @@ export function AgentManagement() {
               className="flex-1 py-3 bg-[#0f3460] text-white rounded-lg border border-[#1a5f7a] min-h-[44px]">Cancel</button>
             <button onClick={handleGiveAdvance} disabled={!advanceAmount}
               className="flex-1 py-3 bg-green-500 text-white rounded-lg font-bold disabled:opacity-50 min-h-[44px]">Release</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Fraud Analysis Modal */}
+      {showFraudModal && fraudResult && (
+        <Modal title="🛡️ Agent Fraud Network Analysis" onClose={() => { setShowFraudModal(false); setFraudResult(null); }}>
+          <div className="space-y-3 text-sm">
+            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+              <p className="text-red-400 text-xs font-bold mb-1">Total Multi-Account Network Base</p>
+              <p className="text-white font-black text-xl">{fraudResult.total_network_accounts ?? "—"}</p>
+              <p className="text-gray-400 text-xs">Identical registration IP clusters</p>
+            </div>
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
+              <p className="text-emerald-400 text-xs font-bold mb-1">Verified Unique Genuine Profiles</p>
+              <p className="text-white font-black text-xl">{fraudResult.unique_genuine_profiles ?? "—"}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+                <p className="text-blue-400 text-xs font-bold mb-1">Today's Deposits</p>
+                <p className="text-white font-bold">Rs {(fraudResult.today_deposits ?? 0).toLocaleString()}</p>
+              </div>
+              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
+                <p className="text-purple-400 text-xs font-bold mb-1">Today's Withdrawals</p>
+                <p className="text-white font-bold">Rs {(fraudResult.today_withdrawals ?? 0).toLocaleString()}</p>
+              </div>
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                <p className="text-amber-400 text-xs font-bold mb-1">Lifetime Deposits</p>
+                <p className="text-white font-bold">Rs {(fraudResult.lifetime_deposits ?? 0).toLocaleString()}</p>
+              </div>
+              <div className="bg-pink-500/10 border border-pink-500/30 rounded-lg p-3">
+                <p className="text-pink-400 text-xs font-bold mb-1">Lifetime Withdrawals</p>
+                <p className="text-white font-bold">Rs {(fraudResult.lifetime_withdrawals ?? 0).toLocaleString()}</p>
+              </div>
+            </div>
+            {fraudResult.flagged_accounts && fraudResult.flagged_accounts.length > 0 && (
+              <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3">
+                <p className="text-red-400 text-xs font-bold mb-2">Flagged Accounts</p>
+                {fraudResult.flagged_accounts.map((acc: any, idx: number) => (
+                  <div key={idx} className="text-xs text-gray-300 mb-1">
+                    • {acc.phone || acc.invite_code} — {acc.reason}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </Modal>
       )}

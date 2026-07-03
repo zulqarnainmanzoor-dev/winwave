@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { adminSupabase } from "../../lib/adminSupabase";
-import { Users, DollarSign, CreditCard, Wallet } from "lucide-react";
+import { Users, DollarSign, CreditCard, Wallet, TrendingUp, Activity } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
@@ -10,11 +10,14 @@ type Stats = {
   pendingDeposits: number;
   pendingWithdrawals: number;
   totalWalletBalance: number;
+  totalLifespanRecharge: number;
+  todayRecharge: number;
 };
 
 export function DashboardOverview() {
   const [stats, setStats] = useState<Stats>({
     totalUsers: 0, pendingDeposits: 0, pendingWithdrawals: 0, totalWalletBalance: 0,
+    totalLifespanRecharge: 0, todayRecharge: 0,
   });
   const [revenueSeries, setRevenueSeries] = useState<{ day: string; revenue: number }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,26 +26,38 @@ export function DashboardOverview() {
   const fetchStats = async () => {
     setError("");
     try {
-      // Use adminSupabase (service_role) for all queries — same client as MemberManagement
-      // so Total Users and Total Balance are always in sync.
+      const sb = adminSupabase as any;
+      // Use adminSupabase (service_role) for all queries
       const [
         { count: totalUsers },
         { count: pendingWithdrawals },
         { data: balanceRows },
         { data: txRows },
         { count: pendingDeposits },
+        { data: lifespanRecharge },
+        { data: todayRechargeRows },
       ] = await Promise.all([
-        // Total Users: count all rows in public.users (matches MemberManagement)
-        adminSupabase.from("users").select("id", { count: "exact", head: true }),
-        adminSupabase.from("withdraw_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
-        // Total Balance: sum main_balance + game_balance from public.users (matches MemberManagement)
-        adminSupabase.from("users").select("main_balance, game_balance"),
-        adminSupabase.from("transactions").select("amount, created_at").eq("type", "deposit").eq("status", "completed").order("created_at", { ascending: true }).limit(50),
-        adminSupabase.from("transactions").select("id", { count: "exact", head: true }).eq("type", "deposit").eq("status", "pending"),
+        sb.from("users").select("id", { count: "exact", head: true }),
+        sb.from("withdraw_requests").select("id", { count: "exact", head: true }).eq("status", "pending"),
+        sb.from("users").select("main_balance, game_balance"),
+        sb.from("transactions").select("amount, created_at").eq("type", "deposit").eq("status", "completed").order("created_at", { ascending: true }).limit(50),
+        sb.from("transactions").select("id", { count: "exact", head: true }).eq("type", "deposit").eq("status", "pending"),
+        // Card A: Total Lifespan Recharge — sum all approved deposits
+        sb.from("deposits").select("amount").eq("status", "approved"),
+        // Card B: Today's Dynamic Recharge — sum approved deposits from today
+        sb.from("deposits").select("amount").eq("status", "approved").gte("created_at", new Date().toISOString().slice(0, 10)),
       ]);
 
       const totalWalletBalance = (balanceRows || []).reduce(
-        (sum, r) => sum + Number(r.main_balance || 0) + Number((r as any).game_balance || 0), 0
+        (sum: number, r: any) => sum + Number(r.main_balance || 0) + Number(r.game_balance || 0), 0
+      );
+
+      const totalLifespanRecharge = (lifespanRecharge || []).reduce(
+        (sum: number, r: any) => sum + Number(r.amount || 0), 0
+      );
+
+      const todayRecharge = (todayRechargeRows || []).reduce(
+        (sum: number, r: any) => sum + Number(r.amount || 0), 0
       );
 
       // Build 7-day revenue series
@@ -59,6 +74,8 @@ export function DashboardOverview() {
         pendingDeposits: Number(pendingDeposits ?? 0),
         pendingWithdrawals: Number(pendingWithdrawals ?? 0),
         totalWalletBalance,
+        totalLifespanRecharge,
+        todayRecharge,
       });
     } catch (err: any) {
       setError("Unable to load dashboard stats. Please refresh.");
@@ -90,10 +107,12 @@ export function DashboardOverview() {
   };
 
   const cards = [
-    { title: "Total Users",          value: stats.totalUsers,          icon: <Users className="w-6 h-6" /> },
-    { title: "Pending Deposits",     value: stats.pendingDeposits,     icon: <CreditCard className="w-6 h-6" /> },
-    { title: "Pending Withdrawals",  value: stats.pendingWithdrawals,  icon: <DollarSign className="w-6 h-6" /> },
-    { title: "Total Wallet Balance", value: stats.totalWalletBalance,  icon: <Wallet className="w-6 h-6" />, unit: "Rs" },
+    { title: "Total Users",              value: stats.totalUsers,              icon: <Users className="w-6 h-6" /> },
+    { title: "Pending Deposits",         value: stats.pendingDeposits,         icon: <CreditCard className="w-6 h-6" /> },
+    { title: "Pending Withdrawals",      value: stats.pendingWithdrawals,      icon: <DollarSign className="w-6 h-6" /> },
+    { title: "Total Wallet Balance",     value: stats.totalWalletBalance,      icon: <Wallet className="w-6 h-6" />, unit: "Rs" },
+    { title: "Total Lifespan Recharge",  value: stats.totalLifespanRecharge,   icon: <TrendingUp className="w-6 h-6" />, unit: "Rs" },
+    { title: "Today's Recharge",         value: stats.todayRecharge,           icon: <Activity className="w-6 h-6" />, unit: "Rs" },
   ];
 
   return (
@@ -112,7 +131,7 @@ export function DashboardOverview() {
           <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-6 text-red-100">{error}</div>
         ) : (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 mb-8">
               {cards.map((c, i) => (
                 <div key={i} className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-6 border border-[#0f3460] hover:border-[#e94560] transition-all hover:shadow-lg hover:shadow-red-500/20">
                   <div className="w-12 h-12 bg-gradient-to-br from-[#e94560] to-[#ff6b6b] rounded-lg flex items-center justify-center mb-4 text-white">

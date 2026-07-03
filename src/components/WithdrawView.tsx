@@ -14,7 +14,6 @@ import {
   KeyRound
 } from "lucide-react";
 import { useUser, PAYMENT_LIMITS } from "../context/UserContext";
-import { supabase } from "../lib/supabaseClient";
 
 export default function WithdrawView({
   onBack,
@@ -23,7 +22,7 @@ export default function WithdrawView({
   onBack: () => void;
   onTransactionClick: () => void;
 }) {
-  const { uid, mainWalletBalance, thirdPartyWalletBalance, totalBalance, setBalance, wageringRequired, wageringCompleted, selectedPaymentMethod, setSelectedPaymentMethod, withdrawalPassword, setWithdrawalPassword: setWithdrawalPasswordContext, boundAccounts, setBoundAccounts } = useUser();
+  const { uid, mainWalletBalance, thirdPartyWalletBalance, totalBalance, setBalance, wageringRequired, wageringCompleted, selectedPaymentMethod, setSelectedPaymentMethod, withdrawalPassword, setWithdrawalPassword: setWithdrawalPasswordContext, boundAccounts, setBoundAccounts, refreshUserData, submitWithdrawal } = useUser();
   const [amount, setAmount] = useState<string>("");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -42,6 +41,10 @@ export default function WithdrawView({
     easypaisa: 0,
     jazzcash: 0,
   });
+
+  // Snapshot state for success modal — captured at submission time to prevent "Rs NaN"
+  const [lastSubmittedAmount, setLastSubmittedAmount] = useState(0);
+  const [lastSubmittedRemarks, setLastSubmittedRemarks] = useState("");
 
   // User can bind exactly 1 account per method - use from context
   const [newWalletName, setNewWalletName] = useState("");
@@ -233,37 +236,45 @@ export default function WithdrawView({
       return;
     }
 
-    // Process withdrawal via atomic RPC: inserts withdrawal_history + deducts balance in one transaction
-    (async () => {
-      try {
-        const { data, error } = await (supabase.rpc as any)('submit_withdrawal', {
-          p_user_id:        uid,
-          p_amount:         withdrawVal,
-          p_method:         selectedPaymentMethod.toUpperCase(),
-          p_account_name:   activeWallet?.name || '',
-          p_account_number: activeWallet?.account || '',
-          p_remarks:        withdrawRemarks.trim() || null,
-        });
+    // All checks passed, call the async withdrawal function
+    processWithdrawalSubmit();
+  };
 
-        if (error || !data?.success) {
-          alert(data?.error || error?.message || 'Failed to process withdrawal.');
-          return;
-        }
+  const processWithdrawalSubmit = async () => {
+    const withdrawVal = parseFloat(amount);
+    if (!uid || !withdrawVal || withdrawVal <= 0) {
+      alert("Please enter a valid transactional value.");
+      return;
+    }
 
-        // Update local balance state to reflect deduction
-        setBalance(mainWalletBalance - withdrawVal);
+    try {
+      const result = await submitWithdrawal({
+        amount: withdrawVal,
+        method: selectedPaymentMethod,
+        accountName: activeWallet?.name || 'Not Provided',
+        accountNumber: activeWallet?.account || '',
+        remarks: withdrawRemarks?.trim() || undefined,
+      });
 
-        setWithdrawCounts((prev) => ({
-          ...prev,
-          [selectedPaymentMethod]: prev[selectedPaymentMethod] + 1,
-        }));
-
-        setShowSuccessModal(true);
-      } catch (e) {
-        console.error('Withdrawal failed', e);
-        alert('Failed to process withdrawal. Please try again later.');
+      if (!result.success) {
+        alert(result.error || 'Failed to register withdrawal sequence.');
+        return;
       }
-    })();
+
+      // Capture snapshot BEFORE clearing input fields — prevents "Rs NaN" in modal
+      setLastSubmittedAmount(withdrawVal);
+      setLastSubmittedRemarks(withdrawRemarks?.trim() || "");
+      setAmount("");
+      setWithdrawRemarks("");
+      setShowSuccessModal(true);
+
+      if (typeof refreshUserData === 'function') {
+        void refreshUserData();
+      }
+    } catch (err) {
+      console.error('Context mapping crash caught:', err);
+      alert('Network transaction sync timed out.');
+    }
   };
 
   return (
@@ -655,7 +666,7 @@ export default function WithdrawView({
         </div>
       )}
 
-      {/* Success Modal */}
+      {/* Success Modal — uses lastSubmittedAmount/Remarks snapshot to prevent "Rs NaN" */}
       {showSuccessModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-xs text-center shadow-xl animate-scale-in text-gray-800">
@@ -664,19 +675,19 @@ export default function WithdrawView({
             </div>
             <h3 className="font-bold text-lg text-gray-900 mb-2">Request Submitted</h3>
             <p className="text-xs text-gray-600 mb-3">
-              Your withdrawal of <span className="font-bold text-gray-900">Rs {parseFloat(amount).toLocaleString()}</span> has been submitted and will arrive in your account within 24 hours.
+              Your withdrawal of <span className="font-bold text-gray-900">Rs {lastSubmittedAmount.toLocaleString()}</span> has been submitted and will arrive in your account within 24 hours.
             </p>
-            {withdrawRemarks && (
+            {lastSubmittedRemarks && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 mb-4 text-left text-[10px] text-amber-800">
                 <span className="font-bold block uppercase tracking-wider text-[8px] text-amber-600 mb-0.5">Verification Remarks</span>
-                "{withdrawRemarks}"
+                "{lastSubmittedRemarks}"
               </div>
             )}
             <button
               onClick={() => {
                 setShowSuccessModal(false);
-                setAmount("");
-                setWithdrawRemarks("");
+                setLastSubmittedAmount(0);
+                setLastSubmittedRemarks("");
                 onBack();
               }}
               className="w-full bg-gradient-to-r from-amber-500 to-orange-500 text-white font-bold py-2.5 rounded-full hover:brightness-110"

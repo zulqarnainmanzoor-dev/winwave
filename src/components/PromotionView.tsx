@@ -45,28 +45,67 @@ export default function PromotionView() {
     team_deposit_amount: 0,
   });
 
+  // --- Fetch network stats using direct queries (replaces RPC) ---
   useEffect(() => {
-    if (!uid) return;
-    (supabase.rpc as any)('get_network_stats', { user_uuid: uid })
-      .then(({ data }: any) => {
-        if (data?.[0]) {
-          const row = data[0];
-          setNetworkStats({
-            direct_count:          Number(row.direct_count          ?? 0),
-            team_count:            Number(row.team_count            ?? 0),
-            direct_deposit_users:  Number(row.direct_deposit_users  ?? 0),
-            team_deposit_users:    Number(row.team_deposit_users    ?? 0),
-            direct_deposit_amount: Number(row.direct_deposit_amount ?? 0),
-            team_deposit_amount:   Number(row.team_deposit_amount   ?? 0),
-          });
+    if (!uid || !referralCode) return;
+
+    const fetchStats = async () => {
+      try {
+        // 1. Direct invitees: users who have inviter_code = this user's invite_code
+        const { data: directUsers, error: dErr } = await supabase
+          .from('users')
+          .select('id, invite_code, main_balance, created_at')
+          .eq('inviter_code', referralCode);
+
+        if (dErr) {
+          console.error('Error fetching direct users:', dErr);
+          return;
         }
-      });
+
+        const directCount = directUsers?.length || 0;
+        const directDepositUsers = directUsers?.filter(u => (u.main_balance || 0) > 0).length || 0;
+        const directDepositAmount = directUsers?.reduce((sum, u) => sum + (u.main_balance || 0), 0) || 0;
+
+        // 2. Team invitees: users whose inviter_code matches any direct user's invite_code
+        const directInviteCodes = directUsers?.map(u => u.invite_code).filter(Boolean) || [];
+        let teamUsers: any[] = [];
+        if (directInviteCodes.length > 0) {
+          const { data: teamData, error: tErr } = await supabase
+            .from('users')
+            .select('id, main_balance, created_at')
+            .in('inviter_code', directInviteCodes);
+          if (!tErr) teamUsers = teamData || [];
+        }
+        const teamCount = teamUsers.length;
+        const teamDepositUsers = teamUsers.filter(u => (u.main_balance || 0) > 0).length;
+        const teamDepositAmount = teamUsers.reduce((sum, u) => sum + (u.main_balance || 0), 0);
+
+        setNetworkStats({
+          direct_count: directCount,
+          team_count: teamCount,
+          direct_deposit_users: directDepositUsers,
+          team_deposit_users: teamDepositUsers,
+          direct_deposit_amount: directDepositAmount,
+          team_deposit_amount: teamDepositAmount,
+        });
+      } catch (err) {
+        console.error('Failed to fetch network stats:', err);
+      }
+    };
+
+    fetchStats();
+
+    // --- Fetch total commission (keep RPC or replace with direct query) ---
+    // For now, keep RPC, but you can replace with a commission table query if needed.
     (supabase.rpc as any)('get_referral_stats', { p_user_id: uid })
       .then(({ data }: any) => {
         if (data?.[0]) setTotalCommissions(Number(data[0].total_commission ?? 0));
-      });
-  }, [uid]);
+      })
+      .catch(console.error);
 
+  }, [uid, referralCode]);
+
+  // --- State for navigation and modals ---
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [activeSlide, setActiveSlide] = useState(0);
@@ -76,6 +115,7 @@ export default function PromotionView() {
   const [showNewInvitees, setShowNewInvitees] = useState(false);
   const [showCommissionDetails, setShowCommissionDetails] = useState(false);
   const [showInvitationRules, setShowInvitationRules] = useState(false);
+  const [showPartnerReward, setShowPartnerReward] = useState(false); // NEW
   const [claimingCommission, setClaimingCommission] = useState(false);
   const [claimMessage, setClaimMessage] = useState<string | null>(null);
 
@@ -88,6 +128,7 @@ export default function PromotionView() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartX, setDragStartX] = useState(0);
 
+  // --- Early returns for sub-views ---
   if (showInviteesOverview) {
     return <InviteesOverviewView onBack={() => setShowInviteesOverview(false)} />;
   }
@@ -104,6 +145,25 @@ export default function PromotionView() {
     return <InvitationRulesView onBack={() => setShowInvitationRules(false)} />;
   }
 
+  if (showPartnerReward) {
+    // Placeholder Partner Reward view – replace with your actual component later
+    return (
+      <div className="flex-1 flex flex-col bg-[#0A0A0B] min-h-screen text-gray-200">
+        <div className="h-12 bg-[#161618] flex items-center px-4 border-b border-white/5 sticky top-0 z-20">
+          <button onClick={() => setShowPartnerReward(false)} className="p-1 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white">
+            <ChevronRight className="w-6 h-6 rotate-180" />
+          </button>
+          <h1 className="text-white text-base font-black tracking-widest flex-1 text-center uppercase">Partner Reward</h1>
+        </div>
+        <div className="p-4 text-center text-gray-400">
+          <p className="text-sm">Partner reward details coming soon.</p>
+          <p className="text-xs mt-2">Please provide the design screenshot to build the exact layout.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Helper functions ---
   const getReferralCodeForShare = () => {
     return (referralCode?.trim() || localStorage.getItem('winwave_referral_code') || '').trim();
   };
@@ -236,7 +296,7 @@ export default function PromotionView() {
         .from('gift_code_claims' as any)
         .select('id')
         .eq('user_id', uid)
-        .eq('gift_code', code)   // correct column name
+        .eq('gift_code', code)
         .maybeSingle();
 
       if (existingClaim?.id) {
@@ -283,6 +343,7 @@ export default function PromotionView() {
     }
   };
 
+  // --- Main render ---
   return (
     <div className="flex-1 flex flex-col bg-[#0A0A0B] animate-slide-up pb-[110px] overflow-y-auto scrollbar-hide relative z-10 text-gray-200">
       {/* Promotion/Earn Header matched with Charcoal Header */}
@@ -291,7 +352,7 @@ export default function PromotionView() {
       </div>
 
       <div className="p-4 space-y-4">
-        {/* Top Static Panel: Yesterday's Commission Card in Matte Metallic Charcoal with Orange Text */}
+        {/* Top Static Panel: Yesterday's Commission Card */}
         <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl p-6 text-center shadow-[0_12px_24px_rgba(0,0,0,0.6)] relative overflow-hidden">
           <div className="absolute right-0 top-0.5 w-24 h-24 bg-orange-500/5 rounded-full blur-2xl pointer-events-none" />
           <div className="absolute left-0 bottom-0 w-20 h-20 bg-zinc-800/10 rounded-full blur-xl pointer-events-none" />
@@ -431,7 +492,7 @@ export default function PromotionView() {
           />
         </div>
 
-        {/* Main Invite Action Button - Highly polished glow and clean gradient pill */}
+        {/* Main Invite Action Button */}
         <button
           onClick={handleInviteFriends}
           className="w-full py-3.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:brightness-110 active:scale-[0.98] transition-all rounded-full font-black text-sm tracking-widest text-black shadow-[0_6px_20px_rgba(249,115,22,0.25)] flex items-center justify-center gap-2 cursor-pointer uppercase"
@@ -453,7 +514,7 @@ export default function PromotionView() {
           </div>
         )}
 
-        {/* Menu list items mimicking the actual dashboard */}
+        {/* Menu list items */}
         <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden divide-y divide-white/5 shadow-[0_8px_16px_rgba(0,0,0,0.4)]">
           {/* Item 1: Invite Code display with Copy */}
           <div className="p-4 flex items-center justify-between gap-3">
@@ -473,6 +534,20 @@ export default function PromotionView() {
               {copiedCode ? <Check className="w-4 h-4 text-[#ffa502]" /> : <Copy className="w-4 h-4" />}
             </button>
           </div>
+
+          {/* NEW Item 1.5: Partner Reward */}
+          <button 
+            onClick={() => setShowPartnerReward(true)}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-white/[0.02] transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-orange-500/10 rounded-xl flex items-center justify-center">
+                <Award className="w-5 h-5 text-[#ffa502]" />
+              </div>
+              <span className="text-sm font-bold text-white">Partner Reward</span>
+            </div>
+            <ChevronRight className="w-4 h-4 text-gray-500" />
+          </button>
 
           {/* Item 2: Commission Details */}
           <button 
@@ -636,7 +711,7 @@ export default function PromotionView() {
                       <span>UID / Username</span>
                       <span>Reg. Date</span>
                     </div>
-                    {referralCount > 0 ? (
+                    {networkStats.direct_count > 0 ? (
                       <div className="divide-y divide-white/5 text-center">
                         <div className="grid grid-cols-2 p-3 text-xs text-gray-300">
                           <span className="font-mono text-[#ffa502] font-bold">UID_121***</span>

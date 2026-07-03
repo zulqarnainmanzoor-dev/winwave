@@ -134,7 +134,13 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
       .select("id, phone_number, invite_code, total_bets, account_status")
       .eq("referred_by", uid)
       .order("created_at", { ascending: false });
-    if (searchId.trim()) q = q.ilike("phone_number", `%${searchId.trim()}%`);
+    
+    // Search by phone number OR invite_code (UID) for better subordinate lookup
+    if (searchId.trim()) {
+      const searchTerm = searchId.trim();
+      q = q.or(`phone_number.ilike.%${searchTerm}%,invite_code.ilike.%${searchTerm}%`);
+    }
+    
     const { data } = await q;
     setInvitees((data as InviteeRow[]) ?? []);
   }, [uid, searchId]);

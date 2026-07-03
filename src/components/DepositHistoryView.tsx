@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { ChevronLeft, Clock, Copy, Check, RefreshCw } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import { useUser } from "../context/UserContext";
@@ -7,10 +7,10 @@ interface DepositRecord {
   id: string;
   amount: number;
   bonus: number;
-  status: string;
-  created_at: string;
-  gateway_ref: string | null;
   method: string;
+  status: string;
+  gateway_ref: string | null;
+  created_at: string;
 }
 
 export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
@@ -20,7 +20,7 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
   const [deposits, setDeposits] = useState<DepositRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchDeposits = async () => {
+  const fetchDeposits = useCallback(async () => {
     if (!uid) return;
     setLoading(true);
     try {
@@ -28,9 +28,11 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
       const since = new Date();
       since.setDate(since.getDate() - daysMap[activeTab]);
 
-      const { data, error } = await supabase
+      // Query deposit_history table directly with correct columns:
+      // id, amount, bonus, method, status, gateway_ref, created_at
+      const { data, error } = await (supabase as any)
         .from("deposit_history")
-        .select("id, amount, status, created_at, gateway_ref, method, order_id")
+        .select("id, amount, bonus, method, status, gateway_ref, created_at")
         .eq("user_id", uid)
         .gte("created_at", since.toISOString())
         .order("created_at", { ascending: false })
@@ -38,15 +40,16 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
 
       if (error) throw error;
 
+      const rawData = (data || []) as any[];
       setDeposits(
-        (data || []).map((tx) => ({
+        rawData.map((tx: any) => ({
           id: tx.id,
-          amount: tx.amount ?? 0,
-          bonus: (tx.amount ?? 0) * 0.02,
-          status: tx.status === "completed" ? "Completed" : tx.status === "failed" ? "Failed" : "Pending",
+          amount: Number(tx.amount ?? 0),
+          bonus: Number(tx.bonus ?? 0),
+          method: tx.method || "Gateway",
+          status: tx.status === "success" ? "Completed" : tx.status === "failed" ? "Failed" : "Pending",
+          gateway_ref: tx.gateway_ref || null,
           created_at: tx.created_at,
-          gateway_ref: tx.gateway_ref ?? tx.order_id,
-          method: tx.method || (tx.gateway_ref?.includes("easypaisa") ? "Easypaisa" : "Jazzcash"),
         }))
       );
     } catch (e) {
@@ -54,13 +57,12 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchDeposits();
   }, [uid, activeTab]);
 
-  const totalSum = deposits.reduce((acc, d) => acc + d.amount + d.bonus, 0);
+  useEffect(() => { fetchDeposits(); }, [fetchDeposits]);
+
+  const totalSum = deposits.reduce((acc, d) => acc + d.amount, 0);
+  const totalBonus = deposits.reduce((acc, d) => acc + d.bonus, 0);
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -70,12 +72,19 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
 
   const tabLabel = { "1day": "1 Day", "7days": "7 Days", "30days": "30 Days" };
 
+  // Status badge renderer
+  const getStatusStyle = (status: string) => {
+    if (status === "Completed") return "text-emerald-400";
+    if (status === "Failed") return "text-red-400";
+    return "text-amber-400";
+  };
+
   return (
     <div className="flex-1 flex flex-col bg-[#0A0A0B] h-screen overflow-y-auto relative text-gray-200 no-scrollbar">
       {/* Header */}
       <div className="flex items-center justify-between p-4 sticky top-0 bg-[#161618] z-40 border-b border-white/5 shadow-md flex-shrink-0">
         <ChevronLeft className="w-6 h-6 text-gray-300 hover:text-white cursor-pointer" onClick={onBack} />
-        <h1 className="text-white font-black tracking-widest text-base uppercase">Deposit History</h1>
+        <h1 className="text-white font-black tracking-widest text-base uppercase">Recharge History</h1>
         <RefreshCw
           className={`w-5 h-5 text-[#ffa502] cursor-pointer ${loading ? "animate-spin" : ""}`}
           onClick={fetchDeposits}
@@ -101,12 +110,14 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
       {/* Summary */}
       <div className="flex justify-between items-center px-4 py-3 bg-[#0A0A0B] text-xs font-bold text-gray-400 select-none flex-shrink-0">
         <span>{deposits.length} record{deposits.length !== 1 ? "s" : ""}</span>
-        <span>
-          Total:{" "}
-          <span className="text-[#ffa502]">
-            Rs{totalSum.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        <div className="flex gap-3">
+          <span>
+            Amount: <span className="text-[#ffa502]">Rs {totalSum.toLocaleString()}</span>
           </span>
-        </span>
+          <span>
+            Bonus: <span className="text-blue-400">Rs {totalBonus.toLocaleString()}</span>
+          </span>
+        </div>
       </div>
 
       {/* List */}
@@ -125,44 +136,57 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
           deposits.map((dep) => (
             <div
               key={dep.id}
-              className="bg-[#161618] border border-white/5 rounded-2xl p-4 flex items-center justify-between shadow-lg"
+              className="bg-[#161618] border border-white/5 rounded-2xl p-4 shadow-lg space-y-3"
             >
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-full bg-[#ffa502] flex items-center justify-center text-black shadow-md flex-shrink-0 mt-0.5">
-                  <Clock className="w-5 h-5" strokeWidth={2.5} />
-                </div>
-                <div className="flex flex-col gap-0.5 text-left">
-                  <span className="text-blue-400 font-bold text-[13px] tracking-tight">
-                    {new Date(dep.created_at).toLocaleString()}
-                  </span>
-                  <div className="flex items-center gap-1.5 text-gray-400 text-xs font-semibold">
-                    <span>ID: {dep.id.substring(0, 8)}...{dep.id.slice(-4)}</span>
-                    <button onClick={() => handleCopy(dep.id)} className="text-gray-400 hover:text-white p-0.5 active:scale-95">
-                      {copiedId === dep.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    </button>
+              {/* Row 1: Date + Status */}
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-9 h-9 rounded-full bg-[#ffa502]/10 flex items-center justify-center flex-shrink-0 border border-[#ffa502]/20">
+                    <Clock className="w-4.5 h-4.5 text-[#ffa502]" strokeWidth={2.5} />
                   </div>
-                  <span className="text-gray-400 text-xs font-semibold">Method: {dep.method}</span>
+                  <div>
+                    <span className="text-blue-400 font-bold text-[12px] tracking-tight">
+                      {new Date(dep.created_at).toLocaleString()}
+                    </span>
+                    {dep.gateway_ref && (
+                      <div className="text-[10px] text-gray-500 font-mono mt-0.5">
+                        Order: {dep.gateway_ref.substring(0, 12)}...
+                        <button onClick={() => handleCopy(dep.gateway_ref!)} className="ml-1 inline align-middle hover:text-white">
+                          {copiedId === dep.gateway_ref ? (
+                            <Check className="w-3 h-3 text-emerald-400 inline" />
+                          ) : (
+                            <Copy className="w-3 h-3 text-gray-400 hover:text-white inline" />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <div className="flex flex-col items-end text-right justify-between min-h-[50px]">
-                <div className="flex flex-col gap-0.5">
-                  <div className="text-xs font-bold">
-                    <span className="text-gray-400">Amount: </span>
-                    <span className="text-[#ffa502] font-black">+{dep.amount.toLocaleString()}</span>
-                  </div>
-                  <div className="text-[11px] font-bold text-[#38bdf8]">
-                    <span className="text-gray-400">Bonus: </span>
-                    <span>+{dep.bonus.toFixed(2)}</span>
-                  </div>
-                </div>
-                <span
-                  className={`font-black text-xs uppercase tracking-wider mt-1.5 ${
-                    dep.status === "Completed" ? "text-emerald-400" : dep.status === "Failed" ? "text-red-400" : "text-amber-400"
-                  }`}
-                >
+                <span className={`font-black text-[10px] uppercase tracking-wider ${getStatusStyle(dep.status)}`}>
                   {dep.status}
                 </span>
+              </div>
+
+              {/* Row 2: Amount + Bonus */}
+              <div className="flex items-center justify-between bg-[#0A0A0B]/50 rounded-xl px-3 py-2.5 border border-white/5">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-wider">Amount</span>
+                  <span className="text-[#ffa502] font-black text-base leading-tight">
+                    +Rs {dep.amount.toLocaleString()}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-wider">Method</span>
+                  <div className="font-bold text-xs text-gray-200 uppercase">
+                    {dep.method}
+                  </div>
+                  {dep.bonus > 0 && (
+                    <div className="text-[11px] font-bold text-blue-400 mt-0.5">
+                      Bonus: +Rs {dep.bonus.toLocaleString()}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           ))

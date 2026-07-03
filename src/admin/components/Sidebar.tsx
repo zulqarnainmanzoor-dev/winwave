@@ -87,8 +87,9 @@ export function Sidebar() {
     { id: "settings",         label: "Settings",          icon: <Settings className="w-5 h-5" /> },
   ];
 
+  // Sub-admin: hide Games menu item completely, but keep all other menu items visible
   const menuItems = adminRole === "sub-admin"
-    ? MENU_ITEMS.filter((i) => i.id === "agents")
+    ? MENU_ITEMS.filter((i) => i.id !== "wingo") // Remove the Games menu
     : MENU_ITEMS;
 
   // Bottom tab bar shows 5 most important items

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, X, Clock, RefreshCw, Search } from "lucide-react";
+import { Check, X, Clock, RefreshCw, Search, Eye } from "lucide-react";
 import { adminSupabase } from "../../lib/adminSupabase";
+import { useAdmin } from "../context/AdminContext";
 
-type RequestStatus = "pending" | "approved" | "rejected" | "completed";
+type RequestStatus = "pending" | "approved" | "rejected" | "completed" | "failed";
 
 interface FundsRequest {
   id: string;
@@ -19,6 +20,7 @@ interface FundsRequest {
   label: string;
   gateway_ref: string | null;
   reason: string | null;
+  remarks: string | null;
   created_at: string;
 }
 
@@ -30,7 +32,11 @@ const S: Record<string, string> = {
   failed:    "bg-red-500/20 text-red-400 border border-red-500/40",
 };
 
+const sb = adminSupabase as any;
+
 export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
+  const { adminRole } = useAdmin();
+  const isSubAdmin = adminRole === "sub-admin";
   const [requests, setRequests]           = useState<FundsRequest[]>([]);
   const [filtered, setFiltered]           = useState<FundsRequest[]>([]);
   const [selected, setSelected]           = useState<FundsRequest | null>(null);
@@ -45,7 +51,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
   // ── Realtime subscription for live withdrawal updates ──────────
   useEffect(() => {
     if (type !== "withdraw") return;
-    const channel = adminSupabase
+    const channel = sb
       .channel("admin-withdrawals-live")
       .on(
         "postgres_changes",
@@ -53,7 +59,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
         () => { void fetchRequests(); }
       )
       .subscribe();
-    return () => { void adminSupabase.removeChannel(channel); };
+    return () => { void sb.removeChannel(channel); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type]);
 
@@ -63,7 +69,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
       let rows: any[] = [];
 
       if (type === "withdraw") {
-        const { data, error: e } = await adminSupabase
+        const { data, error: e } = await sb
           .from("withdrawal_history")
           .select("id, user_id, amount, method, account_name, account_number, status, gateway_ref, reason, remarks, created_at")
           .order("created_at", { ascending: false })
@@ -71,7 +77,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
         if (e) throw e;
         rows = (data || []).map((r: any) => ({ ...r, bank_name: r.method }));
       } else {
-        const { data, error: e } = await adminSupabase
+        const { data, error: e } = await sb
           .from("transactions")
           .select("id, user_id, amount, status, gateway_ref, created_at, type")
           .eq("type", "deposit")
@@ -86,7 +92,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
       const userMap: Record<string, { phone: string; invite_code: string; is_agent: boolean }> = {};
 
       if (uids.length > 0) {
-        const { data: users } = await adminSupabase
+        const { data: users } = await sb
           .from("users")
           .select("id, phone_number, invite_code, is_agent")
           .in("id", uids);
@@ -116,6 +122,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           label:        type === "deposit" ? "Deposit" : u.is_agent ? "Agent Salary" : "Withdrawal",
           gateway_ref:  row.gateway_ref ?? null,
           reason:       row.reason ?? null,
+          remarks:      row.remarks ?? null,
           created_at:   row.created_at || "",
         };
       });
@@ -142,78 +149,115 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
   }, [search, statusFilter, requests]);
 
   const handleApprove = async () => {
-    if (!selected) return;
+    if (!selected || isSubAdmin) return;
     setActing(true); setError("");
     try {
-      if (selected.type === "withdraw") {
-        // ── Step 1: pending → processing via RPC (deducts balance atomically)
-        const { data: approveData, error: approveErr } = await adminSupabase
-          .rpc("approve_withdrawal", { p_withdrawal_id: selected.id });
-        if (approveErr) throw approveErr;
-        if (!approveData?.ok) throw new Error(approveData?.error || "Approve failed");
+      // ── Step 1: Call approve_withdrawal RPC ─────────────────────
+      const { data: approveData, error: approveErr } = await sb.rpc("approve_withdrawal", { p_withdrawal_id: selected.id });
+      if (approveErr) throw new Error(`RPC Error: ${approveErr.message}`);
 
-        // ── Step 2: Call PKPay Payout API
-        try {
-          const payoutRes = await fetch("/api/payout", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              withdrawal_id:  selected.id,   // used as out_trade_no
-              amount:         selected.amount,
-              method:         selected.method,
-              account_number: selected.account_number,
-              account_name:   selected.account_name,
-            }),
-          });
-          const payoutData = await payoutRes.json();
-          if (!payoutRes.ok || !payoutData.success) {
-            throw new Error(payoutData.error || "Payout API failed");
-          }
-          // PKPay accepted — status will move to 'completed' via webhook callback
-        } catch (gatewayErr: any) {
-          // Gateway rejected synchronously — refund immediately
-          await adminSupabase.rpc("fail_withdrawal", {
+      // ── Step 2: Call PKPay Payout API ───────────────────────────
+      try {
+        const payoutRes = await fetch("/api/payout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            withdrawal_id:  selected.id,
+            amount:         selected.amount,
+            method:         selected.method,
+            account_number: selected.account_number,
+            account_name:   selected.account_name,
+          }),
+        });
+        
+        // Safe JSON parsing with content-type validation
+        const contentType = payoutRes.headers.get("content-type");
+        let payoutData: any;
+        if (contentType && contentType.includes("application/json")) {
+          const text = await payoutRes.text();
+          payoutData = text ? JSON.parse(text) : { success: false, message: "Empty JSON response received from merchant node." };
+        } else {
+          const plainText = await payoutRes.text();
+          payoutData = { success: false, message: plainText || "Gateway returned non-JSON text headers." };
+        }
+
+        if (!payoutRes.ok || !payoutData.success) {
+          // Gateway rejected — capture EXACT error message and write to remarks
+          const gatewayError = payoutData.error || payoutData.message || `HTTP ${payoutRes.status}`;
+          const reasonMsg = `Gateway Error: ${gatewayError}`;
+
+          // Write error into remarks column so admin can see exact failure reason
+          await sb.from("withdrawal_history").update({
+            status: "failed",
+            reason: reasonMsg,
+            remarks: reasonMsg,
+            updated_at: new Date().toISOString(),
+          }).eq("id", selected.id);
+
+          // Refund balance
+          await sb.rpc("fail_withdrawal", {
             p_withdrawal_id: selected.id,
-            p_reason: gatewayErr?.message || "Gateway error",
+            p_reason: reasonMsg,
           });
-          setError(`Gateway failed: ${gatewayErr?.message}. Balance refunded.`);
+
+          setError(`❌ ${reasonMsg}`);
           await fetchRequests();
           return;
         }
 
-      } else {
-        // ── Deposit approval (manual) ─────────────────────────────
-        const { data: u } = await adminSupabase.from("users").select("main_balance, wagering_required").eq("id", selected.userId).maybeSingle();
-        const bonus    = parseFloat((selected.amount * 0.02).toFixed(2));
-        const newBal   = Number(u?.main_balance ?? 0) + selected.amount + bonus;
-        const newWager = Number(u?.wagering_required ?? 0) + selected.amount + bonus;
+        // Success — status moves to 'completed' via webhook
+        setError("");
+        await fetchRequests();
 
-        const { error: balErr } = await adminSupabase.from("users").update({ main_balance: newBal, wagering_required: newWager }).eq("id", selected.userId);
-        if (balErr) throw balErr;
+      } catch (gatewayErr: any) {
+        // Network error or exception — capture message
+        const reasonMsg = `Gateway Exception: ${gatewayErr?.message || "Unknown gateway error"}`;
 
-        const { error: txErr } = await adminSupabase.from("transactions").update({ status: "completed" }).eq("id", selected.id);
-        if (txErr) throw txErr;
+        // Write error into remarks for admin visibility
+        await sb.from("withdrawal_history").update({
+          status: "failed",
+          reason: reasonMsg,
+          remarks: reasonMsg,
+          updated_at: new Date().toISOString(),
+        }).eq("id", selected.id);
+
+        // Refund balance
+        await sb.rpc("fail_withdrawal", {
+          p_withdrawal_id: selected.id,
+          p_reason: reasonMsg,
+        });
+
+        setError(`❌ ${reasonMsg}`);
+        await fetchRequests();
+        return;
       }
-      await fetchRequests();
+
     } catch (err: any) {
       setError(err?.message || "Approve failed");
+      await fetchRequests();
     } finally { setActing(false); }
   };
 
   const handleReject = async () => {
-    if (!selected || !rejectReason.trim()) { setError("Enter a rejection reason."); return; }
+    if (!selected || !rejectReason.trim() || isSubAdmin) { setError("Enter a rejection reason."); return; }
     setActing(true); setError("");
     try {
       if (selected.type === "withdraw") {
         // Refund balance via RPC
-        await adminSupabase.rpc("fail_withdrawal", {
+        await sb.rpc("fail_withdrawal", {
           p_withdrawal_id: selected.id,
           p_reason: rejectReason,
         });
-        // Override status to 'rejected' (fail_withdrawal sets 'failed', we want 'rejected' for manual)
-        await adminSupabase.from("withdrawal_history").update({ status: "rejected", reason: rejectReason }).eq("id", selected.id);
+        // Override status to 'rejected' with reason
+        await sb.from("withdrawal_history").update({
+          status: "rejected",
+          reason: rejectReason,
+          remarks: `Admin Rejected: ${rejectReason}`,
+          updated_at: new Date().toISOString(),
+        }).eq("id", selected.id);
 
-        await adminSupabase.from("transactions").insert({
+        // Also insert into transactions for record
+        await sb.from("transactions").insert({
           user_id:     selected.userId,
           type:        "withdraw",
           amount:      selected.amount,
@@ -222,7 +266,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           created_at:  new Date().toISOString(),
         });
       } else {
-        await adminSupabase.from("transactions").update({ status: "failed", gateway_ref: rejectReason }).eq("id", selected.id);
+        await sb.from("transactions").update({ status: "failed", gateway_ref: rejectReason }).eq("id", selected.id);
       }
       setShowReject(false); setRejectReason("");
       await fetchRequests();
@@ -238,7 +282,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
     total:    requests.reduce((s, r) => s + r.amount, 0),
   }), [requests]);
 
-  // ── Shared detail panel content (used in both mobile modal + desktop panel) ──
+  // ── Shared detail panel content ────────────────────────────────────
   const DetailContent = ({ req }: { req: FundsRequest }) => (
     <>
       <div className="space-y-3 mb-5 text-sm">
@@ -260,21 +304,40 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           <span className="text-gray-400">Status</span>
           <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${S[req.status]}`}>{req.status}</span>
         </div>
-        {req.status === "rejected" && req.reason && (
+        {/* Show gateway error remarks when failed/rejected */}
+        {(req.status === "rejected" || req.status === "failed") && req.reason && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-            <p className="text-red-400 text-xs font-bold mb-1">Rejection Reason</p>
+            <p className="text-red-400 text-xs font-bold mb-1">
+              {req.status === "failed" ? "Gateway Error Details" : "Rejection Reason"}
+            </p>
             <p className="text-gray-300 text-xs">{req.reason}</p>
+          </div>
+        )}
+        {/* Show remarks column if set (contains extra error context) */}
+        {(req.status === "rejected" || req.status === "failed") && req.remarks && req.remarks !== req.reason && (
+          <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-2">
+            <p className="text-amber-400 text-[10px] font-bold mb-0.5">Remarks</p>
+            <p className="text-gray-400 text-[10px]">{req.remarks}</p>
           </div>
         )}
       </div>
       {req.status === "pending" && (
         <div className="space-y-2">
-          <button onClick={handleApprove} disabled={acting}
-            className="w-full py-3 bg-gradient-to-r from-emerald-500 to-green-500 text-white font-black rounded-lg hover:brightness-110 disabled:opacity-50 text-sm min-h-[44px]">
-            {acting ? "Processing..." : req.type === "withdraw" ? (req.is_agent ? "✓ Release Agent Salary" : "✓ Approve Withdrawal") : "✓ Approve Deposit"}
+          <button onClick={handleApprove} disabled={acting || isSubAdmin}
+            className={`w-full py-3 rounded-lg font-black text-sm min-h-[44px] flex items-center justify-center gap-2 ${
+              isSubAdmin
+                ? "bg-gray-700/50 text-gray-500 cursor-not-allowed opacity-50"
+                : "bg-gradient-to-r from-emerald-500 to-green-500 text-white hover:brightness-110 disabled:opacity-50"
+            }`}>
+            {isSubAdmin ? <Eye className="w-4 h-4" /> : null}
+            {isSubAdmin ? "View Only (Read-Only Mode)" : acting ? "Processing..." : req.type === "withdraw" ? (req.is_agent ? "✓ Release Agent Salary" : "✓ Approve Withdrawal") : "✓ Approve Deposit"}
           </button>
-          <button onClick={() => setShowReject(true)} disabled={acting}
-            className="w-full py-3 bg-red-500/20 text-red-400 border border-red-500/40 font-black rounded-lg hover:bg-red-500/30 text-sm min-h-[44px]">
+          <button onClick={() => setShowReject(true)} disabled={acting || isSubAdmin}
+            className={`w-full py-3 rounded-lg font-black text-sm min-h-[44px] ${
+              isSubAdmin
+                ? "bg-gray-700/50 text-gray-500 cursor-not-allowed opacity-50"
+                : "bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30"
+            }`}>
             ✗ Reject
           </button>
         </div>
@@ -297,7 +360,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           </button>
         </div>
 
-        {/* Stats — 2 cols on mobile, 4 on desktop */}
+        {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-4 md:mb-6">
           {[
             { label: "Pending",  value: stats.pending,                color: "text-amber-400",   border: "border-amber-500/30" },
@@ -322,7 +385,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
               className="w-full bg-[#1a1a2e] border border-[#0f3460] text-white pl-9 pr-4 py-2.5 rounded-lg text-sm focus:outline-none focus:border-amber-500/50" />
           </div>
           <div className="flex gap-1.5 overflow-x-auto">
-            {(["all", "pending", "approved", "rejected"] as const).map(s => (
+            {(["all", "pending", "approved", "rejected", "failed"] as const).map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
                 className={`px-3 py-2 rounded-lg text-xs font-bold capitalize border transition-all whitespace-nowrap min-h-[44px] ${
                   statusFilter === s ? "bg-amber-500 text-black border-amber-500" : "bg-[#1a1a2e] text-gray-400 border-[#0f3460]"
@@ -333,7 +396,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           </div>
         </div>
 
-        {/* ── MOBILE: Card list (hidden on md+) ───────────────────── */}
+        {/* MOBILE: Card list */}
         <div className="md:hidden space-y-3">
           {loading ? (
             <div className="text-center py-12 text-gray-500">Loading...</div>
@@ -344,7 +407,6 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
               className={`bg-[#1a1a2e] rounded-xl border p-4 cursor-pointer transition-all ${
                 selected?.id === req.id ? "border-amber-500/60" : "border-[#0f3460]"
               }`}>
-              {/* Card header row */}
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
@@ -359,7 +421,6 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
                   {req.status}
                 </span>
               </div>
-              {/* Card body */}
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-gray-400 text-xs">{req.phone} · {req.method}</p>
@@ -367,7 +428,6 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
                 </div>
                 <p className="text-amber-400 font-black text-lg">Rs {req.amount.toLocaleString()}</p>
               </div>
-              {/* Expanded detail on tap */}
               {selected?.id === req.id && (
                 <div className="mt-4 pt-4 border-t border-[#0f3460]">
                   <DetailContent req={req} />
@@ -377,9 +437,8 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           ))}
         </div>
 
-        {/* ── DESKTOP: Table + Detail panel (hidden on mobile) ────── */}
+        {/* DESKTOP: Table + Detail panel */}
         <div className="hidden md:grid grid-cols-3 gap-6">
-          {/* Table */}
           <div className="col-span-2 bg-[#1a1a2e] rounded-xl border border-[#0f3460] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

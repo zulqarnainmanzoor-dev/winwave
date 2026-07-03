@@ -36,6 +36,11 @@ const supabase = createClient(
   process.env.SERVICE_ROLE_KEY    ?? process.env.VITE_SUPABASE_SERVICE_ROLE_KEY ?? ""
 );
 
+// ── Smart Risk / Margin Control flag ──────────────────────────────
+// If disabled, the engine performs a completely fair, unbiased RNG.
+// Default: enabled (true) to preserve platform profit.
+const SMART_RISK_ENABLED = process.env.SMART_RISK_ENABLED !== "false";
+
 // ── Mode config ───────────────────────────────────────────────────
 const MODES = [
   { mode: "30s", interval: 30,  prefix: "1000" },
@@ -86,8 +91,8 @@ function getResultForPeriod(periodStr: string): { number: number; size: "Big"|"S
 }
 
 // ── Margin-adjusted result ────────────────────────────────────────
-// Checks current platform RTP and biases the result if needed.
 // Admin target_result always overrides everything.
+// If no target and Smart Risk is ON, apply platform margin control.
 function getAdjustedResult(
   period: string,
   targetResult: string | null,
@@ -95,62 +100,64 @@ function getAdjustedResult(
 ): { number: number; size: "Big"|"Small"; color: "red"|"green"|"violet" } {
   let result = getResultForPeriod(period);
 
-  // 1. Admin hard override
+  // 1. Admin hard override (NUM takes precedence, but we handle all)
   if (targetResult) {
-    if (targetResult === "BIG" && result.size !== "Big") {
-      const n = 5 + (result.number % 5);
-      return { number: n, size: "Big", color: n === 5 ? "violet" : n % 2 === 0 ? "red" : "green" };
-    }
-    if (targetResult === "SMALL" && result.size !== "Small") {
-      const n = result.number % 5;
-      return { number: n, size: "Small", color: n === 0 ? "violet" : n % 2 === 0 ? "red" : "green" };
-    }
     if (targetResult.startsWith("NUM:")) {
       const n = parseInt(targetResult.slice(4), 10);
       if (!isNaN(n) && n >= 0 && n <= 9) {
-        return { number: n, size: n >= 5 ? "Big" : "Small", color: n === 0 || n === 5 ? "violet" : n % 2 === 0 ? "red" : "green" };
+        return {
+          number: n,
+          size: n >= 5 ? "Big" : "Small",
+          color: n === 0 || n === 5 ? "violet" : n % 2 === 0 ? "red" : "green",
+        };
       }
     }
+    if (targetResult === "BIG") {
+      const n = 5 + (result.number % 5);
+      return { number: n, size: "Big", color: n === 5 ? "violet" : n % 2 === 0 ? "red" : "green" };
+    }
+    if (targetResult === "SMALL") {
+      const n = result.number % 5;
+      return { number: n, size: "Small", color: n === 0 ? "violet" : n % 2 === 0 ? "red" : "green" };
+    }
+    // If targetResult is something else, fall through to raw result
     return result;
   }
 
-  // 2. Platform margin control
-  const rtp = getCurrentRTP();
+  // 2. Platform margin control (only if Smart Risk is enabled)
+  if (SMART_RISK_ENABLED) {
+    const rtp = getCurrentRTP();
 
-  if (rtp > RTP_HIGH_THRESHOLD && pendingBets.length > 0) {
-    // Platform is paying out too much — bias toward house
-    // Find the dominant bet side and flip against it
-    const bigBets   = pendingBets.filter(b => b.bet_type === "size" && b.bet_value === "Big")
-                                 .reduce((s, b) => s + b.amount, 0);
-    const smallBets = pendingBets.filter(b => b.bet_type === "size" && b.bet_value === "Small")
-                                 .reduce((s, b) => s + b.amount, 0);
+    if (rtp > RTP_HIGH_THRESHOLD && pendingBets.length > 0) {
+      // Platform is paying out too much — bias toward house
+      // Find the dominant bet side and flip against it
+      const bigBets   = pendingBets.filter(b => b.bet_type === "size" && b.bet_value === "Big")
+                                   .reduce((s, b) => s + b.amount, 0);
+      const smallBets = pendingBets.filter(b => b.bet_type === "size" && b.bet_value === "Small")
+                                   .reduce((s, b) => s + b.amount, 0);
 
-    if (bigBets > smallBets && result.size === "Big") {
-      // Flip to Small to reduce payout
-      const n = result.number % 5; // 0-4
-      result = { number: n, size: "Small", color: n === 0 ? "violet" : n % 2 === 0 ? "red" : "green" };
-    } else if (smallBets > bigBets && result.size === "Small") {
-      const n = 5 + (result.number % 5); // 5-9
-      result = { number: n, size: "Big", color: n === 5 ? "violet" : n % 2 === 0 ? "red" : "green" };
+      if (bigBets > smallBets && result.size === "Big") {
+        // Flip to Small to reduce payout
+        const n = result.number % 5; // 0-4
+        result = { number: n, size: "Small", color: n === 0 ? "violet" : n % 2 === 0 ? "red" : "green" };
+      } else if (smallBets > bigBets && result.size === "Small") {
+        const n = 5 + (result.number % 5); // 5-9
+        result = { number: n, size: "Big", color: n === 5 ? "violet" : n % 2 === 0 ? "red" : "green" };
+      }
     }
+    // If rtp < RTP_LOW_THRESHOLD → use raw RNG as-is (players win more, corrects low RTP)
   }
-  // If rtp < RTP_LOW_THRESHOLD → use raw RNG as-is (players win more, corrects low RTP)
 
   return result;
 }
 
-// ── Period derivation (UTC, no +1) ────────────────────────────────
+// ── Period derivation (absolute UTC epochs) ──────────────────────
+// Uses Math.floor(now / interval) to align strictly with absolute time.
+// Period string = prefix + epochInterval (unique across all time).
 function derivePeriod(now: Date, interval: number, prefix: string): { period: string; endsAt: Date } {
-  const secs = now.getUTCHours() * 3600 + now.getUTCMinutes() * 60 + now.getUTCSeconds();
-  const roundNum = Math.floor(secs / interval);
-  const dateStr  =
-    `${now.getUTCFullYear()}` +
-    `${String(now.getUTCMonth() + 1).padStart(2, "0")}` +
-    `${String(now.getUTCDate()).padStart(2, "0")}`;
-  const period = `${dateStr}${prefix}${String(roundNum).padStart(5, "0")}`;
-  // endsAt = UTC midnight + (roundNum+1)*interval seconds
-  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  const endsAt   = new Date(midnight + (roundNum + 1) * interval * 1000);
+  const epochInterval = Math.floor(now.getTime() / (interval * 1000));
+  const period = `${prefix}${epochInterval}`;
+  const endsAt = new Date((epochInterval + 1) * interval * 1000);
   return { period, endsAt };
 }
 
@@ -206,13 +213,8 @@ async function resolveRound(
       })
       .eq("id", bet.id);
 
+    // Atomically credit winner balance via RPC (removed redundant update)
     if (isWin && winAmount > 0) {
-      await supabase
-        .from("users")
-        .update({ main_balance: supabase.rpc as any })
-        .eq("id", bet.user_id);
-
-      // Use RPC to atomically credit balance
       await supabase.rpc("credit_user_balance" as any, {
         p_user_id: bet.user_id,
         p_amount:  winAmount,
@@ -242,28 +244,30 @@ async function ensureActiveRound(mode: Mode, interval: number, prefix: string): 
   const now = new Date();
   const { period, endsAt } = derivePeriod(now, interval, prefix);
 
-  // Check if already exists in DB
+  // Check if a round with this period already exists (any status)
   const { data: existing } = await supabase
     .from("game_rounds")
     .select("id")
     .eq("game_type", "wingo")
     .eq("mode", mode)
-    .eq("status", "active")
+    .eq("period", period)
     .maybeSingle();
 
   if (!existing) {
+    // Use upsert with onConflict to safely insert (unique constraint on period)
     await supabase
       .from("game_rounds")
-      .insert({
-        game_type:  "wingo",
-        mode,
-        period,
-        started_at: now.toISOString(),
-        ends_at:    endsAt.toISOString(),
-        status:     "active",
-      })
-      .onConflict("period")
-      .ignore();
+      .upsert(
+        {
+          game_type:  "wingo",
+          mode,
+          period,
+          started_at: now.toISOString(),
+          ends_at:    endsAt.toISOString(),
+          status:     "active",
+        },
+        { onConflict: "period" }
+      );
   }
 
   setActiveRound(mode, period, endsAt);
@@ -301,12 +305,11 @@ async function tick(): Promise<void> {
 let tickInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startWinGoEngine(): void {
-  if (tickInterval) return; // already running
+  if (tickInterval) return;
 
   loadStore();
   console.log("[WinGo] 24/7 engine started.");
 
-  // Run immediately, then every 2 seconds
   void tick();
   tickInterval = setInterval(() => void tick(), 2000);
 }
