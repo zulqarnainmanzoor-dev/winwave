@@ -241,6 +241,71 @@ export default function InvitationRulesView({ onBack }: InvitationRulesViewProps
             </div>
           </div>
 
+          {/* Rebate Level Table */}
+          <div className="mt-6 space-y-3">
+            <h3 className="text-center text-[#ffa502] text-sm font-black uppercase tracking-wider">
+              Rebate Level Requirements
+            </h3>
+            
+            <div className="bg-[#161618] border border-white/5 rounded-3xl overflow-hidden shadow-[0_8px_16px_rgba(0,0,0,0.4)]">
+              {/* Table Header */}
+              <div className="grid grid-cols-4 bg-[#2C2C2E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center border-b border-white/5">
+                <span>Rebate Level</span>
+                <span>Team Number</span>
+                <span>Team Betting</span>
+                <span>Team Deposit</span>
+              </div>
+              
+              {/* Table Rows */}
+              {[
+                { level: 0, teamNum: 0, teamBet: '0', teamDep: '0' },
+                { level: 1, teamNum: 10, teamBet: '1.50M', teamDep: '300K' },
+                { level: 2, teamNum: 15, teamBet: '2.50M', teamDep: '500K' },
+                { level: 3, teamNum: 30, teamBet: '12.5M', teamDep: '2.50M' },
+                { level: 4, teamNum: 45, teamBet: '25M', teamDep: '5M' },
+                { level: 5, teamNum: 50, teamBet: '75M', teamDep: '15M' },
+                { level: 6, teamNum: 60, teamBet: '150M', teamDep: '30M' },
+              ].map((row) => (
+                <div 
+                  key={row.level} 
+                  className="grid grid-cols-4 p-3 text-xs text-center items-center gap-1 border-b border-white/5 last:border-b-0 hover:bg-white/[0.02] transition-colors"
+                >
+                  {/* Rebate Level with Image */}
+                  <div className="flex items-center justify-center gap-2">
+                    <img 
+                      src={`/assets/svg/VIP Level ${row.level}.png`}
+                      alt={`VIP ${row.level}`}
+                      className="w-6 h-6 object-contain"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                      }}
+                    />
+                    <span className="font-black text-white">VIP {row.level}</span>
+                  </div>
+                  
+                  {/* Team Number */}
+                  <span className="text-[#ffa502] font-bold">
+                    {row.teamNum.toLocaleString()}
+                  </span>
+                  
+                  {/* Team Betting */}
+                  <span className="text-gray-300 font-bold">
+                    {row.teamBet}
+                  </span>
+                  
+                  {/* Team Deposit */}
+                  <span className="text-green-400 font-bold">
+                    {row.teamDep}
+                  </span>
+                </div>
+              ))}
+            </div>
+            
+            <p className="text-[10px] text-gray-500 text-center font-medium px-4">
+              Higher VIP levels unlock better rebate rates and higher commission percentages
+            </p>
+          </div>
+
         </div>
       </div>
     </div>

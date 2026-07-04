@@ -304,7 +304,7 @@ npm run build
 ### Step 3: Test Locally
 ```bash
 npm run dev
-# Navigate to http://localhost:3000/admin
+# Navigate to https://winwave-official.vercel.app/admin
 # All pages should render correctly
 ```
 

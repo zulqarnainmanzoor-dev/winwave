@@ -50,13 +50,13 @@ export const logSecurityEvent = async (
     await supabase.from('security_events').insert({
       event_type: eventType,
       phone_number: phone,
-      ip_address: context.ip,
+      ip: context.ip,
       device_id: context.deviceId || null,
       device_fingerprint: context.fingerprint,
       user_agent: context.userAgent,
       metadata: details,
       created_at: new Date().toISOString(),
-    });
+    } as any);
   } catch (error) {
     console.warn('Failed to persist security event:', error);
   }
@@ -68,8 +68,8 @@ export const enforceRegistrationAbuseGuards = async (context: SecurityContext, p
     const { data: recentAttempts, error } = await supabase
       .from('registration_attempts')
       .select('id')
-      .or(`ip.eq.${context.ip},device_fingerprint.eq.${context.fingerprint}`)
-      .gte('attempted_at', since)
+      .or(`ip.eq.${context.ip},phone_number.eq.${phone}`)
+      .gte('created_at', since)
       .limit(5);
 
     if (error) {
@@ -83,10 +83,7 @@ export const enforceRegistrationAbuseGuards = async (context: SecurityContext, p
     await supabase.from('registration_attempts').insert({
       ip: context.ip,
       phone_number: phone,
-      device_fingerprint: context.fingerprint,
-      device_id: context.deviceId || null,
-      user_agent: context.userAgent,
-      attempted_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     });
   } catch (error) {
     console.warn('Failed to persist registration attempt audit:', error);

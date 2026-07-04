@@ -19,14 +19,17 @@ import {
 } from "lucide-react";
 import { useLanguage } from "../context/LanguageContext";
 import { useUser } from "../context/UserContext";
+import { useNavigate } from "react-router-dom";
 import InviteesOverviewView from "./InviteesOverviewView";
 import NewInviteesView from "./NewInviteesView";
 import CommissionDetailsView from "./CommissionDetailsView";
 import InvitationRulesView from "./InvitationRulesView";
+import PartnerRewards from "./PartnerRewards";
 import AnimatedCounter from "./AnimatedCounter";
 
 export default function PromotionView() {
   const { t } = useLanguage();
+  const navigate = useNavigate();
   const {
     uid,
     referralCode,
@@ -37,50 +40,82 @@ export default function PromotionView() {
   } = useUser();
 
   const [networkStats, setNetworkStats] = useState({
-    direct_count: 0,
-    team_count: 0,
-    direct_deposit_users: 0,
-    team_deposit_users: 0,
-    direct_deposit_amount: 0,
-    team_deposit_amount: 0,
+    direct_count: null as number | null,
+    team_count: null as number | null,
+    direct_deposit_users: null as number | null,
+    team_deposit_users: null as number | null,
+    direct_deposit_amount: null as number | null,
+    team_deposit_amount: null as number | null,
   });
 
   // --- Fetch network stats using direct queries (replaces RPC) ---
   useEffect(() => {
-    if (!uid || !referralCode) return;
+    if (!uid) return;
 
     const fetchStats = async () => {
       try {
-        // 1. Direct invitees: users who have inviter_code = this user's invite_code
-        const { data: directUsers, error: dErr } = await supabase
+        console.log('📊 [PromotionView] Fetching network stats for uid:', uid);
+        
+        // Set loading state
+        setNetworkStats({
+          direct_count: null,
+          team_count: null,
+          direct_deposit_users: null,
+          team_deposit_users: null,
+          direct_deposit_amount: null,
+          team_deposit_amount: null,
+        });
+        
+        // 1. Direct invitees: users who have referred_by = current user's uid
+        const { data: directUsers, error: dErr } = await (supabase as any)
           .from('users')
-          .select('id, invite_code, main_balance, created_at')
-          .eq('inviter_code', referralCode);
+          .select('id, invite_code, total_deposit, created_at')
+          .eq('referred_by', uid);
 
         if (dErr) {
-          console.error('Error fetching direct users:', dErr);
+          console.error('❌ [PromotionView] Error fetching direct users:', dErr);
+          setNetworkStats({
+            direct_count: 0,
+            team_count: 0,
+            direct_deposit_users: 0,
+            team_deposit_users: 0,
+            direct_deposit_amount: 0,
+            team_deposit_amount: 0,
+          });
           return;
         }
 
-        const directCount = directUsers?.length || 0;
-        const directDepositUsers = directUsers?.filter(u => (u.main_balance || 0) > 0).length || 0;
-        const directDepositAmount = directUsers?.reduce((sum, u) => sum + (u.main_balance || 0), 0) || 0;
+        console.log('📊 [PromotionView] Direct users found:', directUsers?.length || 0);
+        console.log('📊 [PromotionView] First 5 direct users:', directUsers?.slice(0, 5));
 
-        // 2. Team invitees: users whose inviter_code matches any direct user's invite_code
-        const directInviteCodes = directUsers?.map(u => u.invite_code).filter(Boolean) || [];
+        const directCount = directUsers?.length || 0;
+        const directDepositUsers = directUsers?.filter((u: any) => (u.total_deposit || 0) > 0).length || 0;
+        const directDepositAmount = directUsers?.reduce((sum: number, u: any) => sum + (u.total_deposit || 0), 0) || 0;
+
+        // 2. Team invitees (Level 2): users whose referred_by matches any direct user's id
+        const directUserIds = directUsers?.map((u: any) => u.id).filter(Boolean) || [];
+        console.log('📊 [PromotionView] Direct user IDs:', directUserIds);
+        
         let teamUsers: any[] = [];
-        if (directInviteCodes.length > 0) {
-          const { data: teamData, error: tErr } = await supabase
+        if (directUserIds.length > 0) {
+          const { data: teamData, error: tErr } = await (supabase as any)
             .from('users')
-            .select('id, main_balance, created_at')
-            .in('inviter_code', directInviteCodes);
-          if (!tErr) teamUsers = teamData || [];
+            .select('id, total_deposit, created_at')
+            .in('referred_by', directUserIds);
+          
+          if (tErr) {
+            console.error('❌ [PromotionView] Error fetching team users:', tErr);
+          } else {
+            teamUsers = teamData || [];
+            console.log('📊 [PromotionView] Team users found:', teamUsers.length);
+            console.log('📊 [PromotionView] First 5 team users:', teamUsers.slice(0, 5));
+          }
         }
         const teamCount = teamUsers.length;
-        const teamDepositUsers = teamUsers.filter(u => (u.main_balance || 0) > 0).length;
-        const teamDepositAmount = teamUsers.reduce((sum, u) => sum + (u.main_balance || 0), 0);
+        const teamDepositUsers = teamUsers.filter(u => (u.total_deposit || 0) > 0).length;
+        const teamDepositAmount = teamUsers.reduce((sum, u) => sum + (u.total_deposit || 0), 0);
 
-        setNetworkStats({
+        console.log('📊 [PromotionView] Stats:', {
           direct_count: directCount,
           team_count: teamCount,
           direct_deposit_users: directDepositUsers,
@@ -88,8 +123,30 @@ export default function PromotionView() {
           direct_deposit_amount: directDepositAmount,
           team_deposit_amount: teamDepositAmount,
         });
+
+        // Update state with fetched data
+        const newStats = {
+          direct_count: directCount,
+          team_count: teamCount,
+          direct_deposit_users: directDepositUsers,
+          team_deposit_users: teamDepositUsers,
+          direct_deposit_amount: directDepositAmount,
+          team_deposit_amount: teamDepositAmount,
+        };
+        
+        console.log('📊 [PromotionView] Setting networkStats:', newStats);
+        setNetworkStats(newStats);
+        
       } catch (err) {
-        console.error('Failed to fetch network stats:', err);
+        console.error('❌ [PromotionView] Failed to fetch network stats:', err);
+        setNetworkStats({
+          direct_count: 0,
+          team_count: 0,
+          direct_deposit_users: 0,
+          team_deposit_users: 0,
+          direct_deposit_amount: 0,
+          team_deposit_amount: 0,
+        });
       }
     };
 
@@ -123,45 +180,11 @@ export default function PromotionView() {
   const [giftCode, setGiftCode] = useState("");
   const [giftError, setGiftError] = useState("");
   const [giftSuccess, setGiftSuccess] = useState("");
+  const [recentInvitees, setRecentInvitees] = useState<Array<{id: string, phone: string, date: string}>>([]);
 
   // Mouse drag state and handlers for carousel swipe on desktop
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartX, setDragStartX] = useState(0);
-
-  // --- Early returns for sub-views ---
-  if (showInviteesOverview) {
-    return <InviteesOverviewView onBack={() => setShowInviteesOverview(false)} />;
-  }
-
-  if (showNewInvitees) {
-    return <NewInviteesView onBack={() => setShowNewInvitees(false)} />;
-  }
-
-  if (showCommissionDetails) {
-    return <CommissionDetailsView onBack={() => setShowCommissionDetails(false)} />;
-  }
-
-  if (showInvitationRules) {
-    return <InvitationRulesView onBack={() => setShowInvitationRules(false)} />;
-  }
-
-  if (showPartnerReward) {
-    // Placeholder Partner Reward view – replace with your actual component later
-    return (
-      <div className="flex-1 flex flex-col bg-[#0A0A0B] min-h-screen text-gray-200">
-        <div className="h-12 bg-[#161618] flex items-center px-4 border-b border-white/5 sticky top-0 z-20">
-          <button onClick={() => setShowPartnerReward(false)} className="p-1 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white">
-            <ChevronRight className="w-6 h-6 rotate-180" />
-          </button>
-          <h1 className="text-white text-base font-black tracking-widest flex-1 text-center uppercase">Partner Reward</h1>
-        </div>
-        <div className="p-4 text-center text-gray-400">
-          <p className="text-sm">Partner reward details coming soon.</p>
-          <p className="text-xs mt-2">Please provide the design screenshot to build the exact layout.</p>
-        </div>
-      </div>
-    );
-  }
 
   // --- Helper functions ---
   const getReferralCodeForShare = () => {
@@ -213,14 +236,14 @@ export default function PromotionView() {
     setClaimingCommission(true);
     setClaimMessage(null);
     try {
-      const { data: userRow, error: fetchErr } = await supabase
+      const { data: userRow, error: fetchErr } = await (supabase as any)
         .from('users')
         .select('main_balance')
         .eq('id', uid)
         .maybeSingle();
       if (fetchErr) throw fetchErr;
       const next = Number(userRow?.main_balance ?? 0) + Number(totalCommissions);
-      const { error: updateErr } = await supabase
+      const { error: updateErr } = await (supabase as any)
         .from('users')
         .update({ main_balance: next })
         .eq('id', uid);
@@ -276,6 +299,47 @@ export default function PromotionView() {
     setIsDragging(false);
   };
 
+  // Fetch recent invitees for display
+  useEffect(() => {
+    if (!uid) return;
+    
+    const fetchRecentInvitees = async () => {
+      try {
+        console.log('📊 [PromotionView] Fetching recent invitees for uid:', uid);
+        
+        const { data, error } = await (supabase as any)
+          .from('users')
+          .select('id, phone_number, created_at')
+          .eq('referred_by', uid)
+          .order('created_at', { ascending: false })
+          .limit(10);
+        
+        if (error) {
+          console.error('❌ [PromotionView] Error fetching recent invitees:', error);
+          throw error;
+        }
+        
+        console.log('📊 [PromotionView] Recent invitees found:', data?.length || 0);
+        
+        const formatted = (data || []).map((u: any) => ({
+          id: u.id,
+          phone: u.phone_number || 'Unknown',
+          date: new Date(u.created_at).toLocaleDateString('en-US', { 
+            month: 'short', 
+            day: 'numeric',
+            year: 'numeric'
+          })
+        }));
+        
+        setRecentInvitees(formatted);
+      } catch (err) {
+        console.error('❌ [PromotionView] Failed to fetch recent invitees:', err);
+      }
+    };
+    
+    fetchRecentInvitees();
+  }, [uid]);
+
   const handleGiftRedeem = async (e: React.FormEvent) => {
     e.preventDefault();
     setGiftError("");
@@ -292,8 +356,8 @@ export default function PromotionView() {
     }
 
     try {
-      const { data: existingClaim } = await supabase
-        .from('gift_code_claims' as any)
+      const { data: existingClaim } = await (supabase as any)
+        .from('gift_code_claims')
         .select('id')
         .eq('user_id', uid)
         .eq('gift_code', code)
@@ -304,8 +368,8 @@ export default function PromotionView() {
         return;
       }
 
-      const { data: giftRow, error: giftRowError } = await supabase
-        .from('gift_codes' as any)
+      const { data: giftRow, error: giftRowError } = await (supabase as any)
+        .from('gift_codes')
         .select('id, amount')
         .eq('code', code)
         .eq('status', 'active')
@@ -317,21 +381,21 @@ export default function PromotionView() {
       }
 
       const reward = Number(giftRow.amount || 0);
-      const { data: userRow, error: userFetchErr } = await supabase
+      const { data: userRow, error: userFetchErr } = await (supabase as any)
         .from('users')
         .select('main_balance')
         .eq('id', uid)
         .maybeSingle();
       if (userFetchErr) throw userFetchErr;
       const nextBalance = Number(userRow?.main_balance ?? 0) + reward;
-      const { error: userUpdateErr } = await supabase
+      const { error: userUpdateErr } = await (supabase as any)
         .from('users')
         .update({ main_balance: nextBalance })
         .eq('id', uid);
       if (userUpdateErr) throw userUpdateErr;
 
-      await supabase
-        .from('gift_code_claims' as any)
+      await (supabase as any)
+        .from('gift_code_claims')
         .insert([{ user_id: uid, gift_code: code, amount: reward, created_at: new Date().toISOString() }]);
 
       setBalance(nextBalance);
@@ -344,6 +408,28 @@ export default function PromotionView() {
   };
 
   // --- Main render ---
+  const renderContent = () => {
+    if (showInviteesOverview) {
+      return <InviteesOverviewView onBack={() => { setShowInviteesOverview(false); setActiveModal(null); }} />;
+    }
+    if (showNewInvitees) {
+      return <NewInviteesView onBack={() => { setShowNewInvitees(false); setActiveModal(null); }} />;
+    }
+    if (showCommissionDetails) {
+      return <CommissionDetailsView onBack={() => { setShowCommissionDetails(false); setActiveModal(null); }} />;
+    }
+    if (showInvitationRules) {
+      return <InvitationRulesView onBack={() => { setShowInvitationRules(false); setActiveModal(null); }} />;
+    }
+    if (showPartnerReward) {
+      return <PartnerRewards onBack={() => { setShowPartnerReward(false); setActiveModal(null); }} />;
+    }
+    return null;
+  };
+
+  const subView = renderContent();
+  if (subView) return subView;
+
   return (
     <div className="flex-1 flex flex-col bg-[#0A0A0B] animate-slide-up pb-[110px] overflow-y-auto scrollbar-hide relative z-10 text-gray-200">
       {/* Promotion/Earn Header matched with Charcoal Header */}
@@ -391,25 +477,25 @@ export default function PromotionView() {
                 <div className="space-y-4 pr-2">
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={networkStats.direct_count} decimals={0} />
+                      <AnimatedCounter value={networkStats.direct_count ?? 0} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Registered Users</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-[#ffa502] block">
-                      <AnimatedCounter value={networkStats.direct_deposit_users} decimals={0} />
+                      <AnimatedCounter value={networkStats.direct_deposit_users ?? 0} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Users</span>
                   </div>
                   <div>
                     <span className="text-base font-black text-white block">
-                      <AnimatedCounter value={networkStats.direct_deposit_amount} prefix="Rs " />
+                      <AnimatedCounter value={networkStats.direct_deposit_amount ?? 0} prefix="Rs " />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Amount</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={networkStats.direct_deposit_users} decimals={0} />
+                      <AnimatedCounter value={networkStats.direct_deposit_users ?? 0} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">First Deposit Users</span>
                   </div>
@@ -419,25 +505,25 @@ export default function PromotionView() {
                 <div className="space-y-4 pl-2">
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={networkStats.team_count} decimals={0} />
+                      <AnimatedCounter value={networkStats.team_count ?? 0} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Registered Users</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-[#ffa502] block">
-                      <AnimatedCounter value={networkStats.team_deposit_users} decimals={0} />
+                      <AnimatedCounter value={networkStats.team_deposit_users ?? 0} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Users</span>
                   </div>
                   <div>
                     <span className="text-base font-black text-white block">
-                      <AnimatedCounter value={networkStats.team_deposit_amount} prefix="Rs " />
+                      <AnimatedCounter value={networkStats.team_deposit_amount ?? 0} prefix="Rs " />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">Deposit Amount</span>
                   </div>
                   <div>
                     <span className="text-lg font-black text-white block">
-                      <AnimatedCounter value={networkStats.team_deposit_users} decimals={0} />
+                      <AnimatedCounter value={networkStats.team_deposit_users ?? 0} decimals={0} />
                     </span>
                     <span className="text-[10px] font-bold text-gray-500 block uppercase">First Deposit Users</span>
                   </div>
@@ -462,16 +548,16 @@ export default function PromotionView() {
                 </div>
               </div>
 
-              <div className="border-t border-white/5 pt-4 grid grid-cols-2 text-center divide-x divide-white/5">
+                <div className="border-t border-white/5 pt-4 grid grid-cols-2 text-center divide-x divide-white/5">
                 <div>
                   <span className="text-xl font-black text-white block">
-                    <AnimatedCounter value={networkStats.direct_count} decimals={0} />
+                    <AnimatedCounter value={networkStats.direct_count ?? 0} decimals={0} />
                   </span>
                   <span className="text-[10px] font-bold text-gray-500 block uppercase mt-1">Direct Invitees</span>
                 </div>
                 <div>
                   <span className="text-xl font-black text-white block">
-                    <AnimatedCounter value={networkStats.team_count} decimals={0} />
+                    <AnimatedCounter value={networkStats.team_count ?? 0} decimals={0} />
                   </span>
                   <span className="text-[10px] font-bold text-gray-500 block uppercase mt-1">Team Invitees</span>
                 </div>
@@ -524,7 +610,9 @@ export default function PromotionView() {
               </div>
               <div className="min-w-0">
                 <div className="text-sm font-bold text-white">Invite Code</div>
-                <div className="text-sm font-black text-orange-300 font-mono select-all break-all">{referralCode || 'No invite code yet'}</div>
+                <div className="text-sm font-black text-orange-300 font-mono select-all break-all">
+                  {referralCode ? `${referralCode}` : 'No invite code yet'}
+                </div>
               </div>
             </div>
             <button 
@@ -607,7 +695,7 @@ export default function PromotionView() {
 
           {/* Item 6: Rebate Ratio */}
           <button 
-            onClick={() => setActiveModal("rebate_ratio")}
+            onClick={() => navigate('/rebate-ratio')}
             className="w-full p-4 flex items-center justify-between text-left hover:bg-white/[0.02] transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-3">
@@ -708,15 +796,19 @@ export default function PromotionView() {
                   <p className="text-xs text-gray-400">Recent players who registered on your direct tracking referral network.</p>
                   <div className="border border-white/5 rounded-2xl overflow-hidden bg-[#0A0A0B]">
                     <div className="grid grid-cols-2 bg-[#1C1C1E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">
-                      <span>UID / Username</span>
+                      <span>UID / Phone</span>
                       <span>Reg. Date</span>
                     </div>
-                    {networkStats.direct_count > 0 ? (
-                      <div className="divide-y divide-white/5 text-center">
-                        <div className="grid grid-cols-2 p-3 text-xs text-gray-300">
-                          <span className="font-mono text-[#ffa502] font-bold">UID_121***</span>
-                          <span className="text-gray-500">2026-06-28</span>
-                        </div>
+                    {recentInvitees.length > 0 ? (
+                      <div className="divide-y divide-white/5">
+                        {recentInvitees.map((invitee) => (
+                          <div key={invitee.id} className="grid grid-cols-2 p-3 text-xs text-center items-center">
+                            <span className="font-mono text-[#ffa502] font-bold">
+                              {invitee.phone.slice(0, 4)}****{invitee.phone.slice(-2)}
+                            </span>
+                            <span className="text-gray-500">{invitee.date}</span>
+                          </div>
+                        ))}
                       </div>
                     ) : (
                       <div className="p-8 text-center text-xs text-gray-500 font-bold uppercase">
@@ -729,28 +821,215 @@ export default function PromotionView() {
 
               {activeModal === "rebate_ratio" && (
                 <div className="space-y-4">
-                  <p className="text-xs text-gray-400">Current active rebate multipliers grouped by game categories.</p>
-                  <div className="border border-white/5 rounded-2xl overflow-hidden bg-[#0A0A0B]">
-                    <div className="grid grid-cols-3 bg-[#1C1C1E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">
-                      <span>Game Type</span>
-                      <span>Lvl 1 %</span>
-                      <span>Lvl 2 %</span>
+                  <p className="text-xs text-gray-400">Rebate commission rates by level</p>
+                  
+                  {/* Game Category Tabs */}
+                  <div className="grid grid-cols-4 gap-2">
+                    <div className="bg-gradient-to-r from-green-400 to-cyan-400 rounded-xl p-3 text-center">
+                      <div className="w-8 h-8 mx-auto mb-1 bg-black/20 rounded-full flex items-center justify-center">
+                        <span className="text-lg">🎱</span>
+                      </div>
+                      <p className="text-[10px] font-black text-black uppercase">Lottery</p>
                     </div>
-                    <div className="divide-y divide-white/5 text-center text-xs">
-                      <div className="grid grid-cols-3 p-3 text-gray-300">
-                        <span className="font-bold">Lottery</span>
-                        <span className="text-[#ffa502] font-bold">0.60%</span>
-                        <span className="text-gray-500">0.30%</span>
+                    <div className="bg-[#1C1C1E] border border-white/5 rounded-xl p-3 text-center">
+                      <div className="w-8 h-8 mx-auto mb-1 bg-white/5 rounded-full flex items-center justify-center">
+                        <span className="text-lg">🎰</span>
                       </div>
-                      <div className="grid grid-cols-3 p-3 text-gray-300">
-                        <span className="font-bold">Slots</span>
-                        <span className="text-[#ffa502] font-bold">0.50%</span>
-                        <span className="text-gray-500">0.25%</span>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase">Casino</p>
+                    </div>
+                    <div className="bg-[#1C1C1E] border border-white/5 rounded-xl p-3 text-center">
+                      <div className="w-8 h-8 mx-auto mb-1 bg-white/5 rounded-full flex items-center justify-center">
+                        <span className="text-lg">⚽</span>
                       </div>
-                      <div className="grid grid-cols-3 p-3 text-gray-300">
-                        <span className="font-bold">Live Casino</span>
-                        <span className="text-[#ffa502] font-bold">0.40%</span>
-                        <span className="text-gray-500">0.20%</span>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase">Sports</p>
+                    </div>
+                    <div className="bg-[#1C1C1E] border border-white/5 rounded-xl p-3 text-center">
+                      <div className="w-8 h-8 mx-auto mb-1 bg-white/5 rounded-full flex items-center justify-center">
+                        <span className="text-lg">🎯</span>
+                      </div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase">R...</p>
+                    </div>
+                  </div>
+
+                  {/* Rebate Level L0 */}
+                  <div className="bg-[#1C1C1E] border border-white/5 rounded-2xl p-4">
+                    <h3 className="text-sm font-black text-green-400 mb-3">Rebate level L0</h3>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">1 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.3%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/50 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/50 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">2 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.09%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/30 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/30 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">3 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.027%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/20 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/20 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">4 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.0081%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/10 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/10 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">5 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.00243%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/5 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/5 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">6 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.000729%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Rebate Level L1 */}
+                  <div className="bg-[#1C1C1E] border border-white/5 rounded-2xl p-4">
+                    <h3 className="text-sm font-black text-cyan-400 mb-3">Rebate level L1</h3>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-cyan-400 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-cyan-400 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">1 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.35%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-cyan-400/50 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-cyan-400/50 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">2 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.1225%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-cyan-400/30 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-cyan-400/30 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">3 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.042875%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-cyan-400/20 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-cyan-400/20 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">4 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.015006%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-cyan-400/10 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-cyan-400/10 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">5 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.005252%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-cyan-400/5 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-cyan-400/5 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">6 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.001838%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Rebate Level L2 */}
+                  <div className="bg-[#1C1C1E] border border-white/5 rounded-2xl p-4">
+                    <h3 className="text-sm font-black text-green-400 mb-3">Rebate level L2</h3>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">1 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.375%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/50 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/50 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">2 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.140625%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/30 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/30 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">3 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.052734%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/20 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/20 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">4 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.019775%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/10 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/10 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">5 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.007416%</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full border-2 border-green-400/5 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-green-400/5 rounded-full" />
+                          </div>
+                          <span className="text-xs text-gray-300">6 level lower level commission rebate</span>
+                        </div>
+                        <span className="text-sm font-black text-white">0.002781%</span>
                       </div>
                     </div>
                   </div>

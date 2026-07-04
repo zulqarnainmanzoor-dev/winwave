@@ -17,6 +17,14 @@ interface AgentData {
   yesterday_commission: number;
   status: "active" | "suspended";
   is_agent?: boolean;
+  invited_members?: Array<{
+    id: string;
+    invite_code: string;
+    phone_number: string;
+    created_at: string;
+    total_deposit: number;
+    total_bets: number;
+  }>;
 }
 
 interface Agent {
@@ -31,8 +39,8 @@ interface Agent {
 // ── Modal ─────────────────────────────────────────────────────────
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="w-full sm:max-w-md bg-gradient-to-br from-[#1a1a2e] to-[#16213e] border border-[#0f3460] rounded-t-2xl sm:rounded-2xl p-6">
+    <div className="fixed inset-0 bg-black/70 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4" onClick={onClose}>
+      <div className="w-full sm:max-w-md bg-gradient-to-br from-[#1a1a2e] to-[#16213e] border border-[#0f3460] rounded-t-2xl sm:rounded-2xl p-6" onClick={e => e.stopPropagation()}>
         <h3 className="text-white font-bold text-lg mb-4">{title}</h3>
         {children}
       </div>
@@ -103,13 +111,52 @@ export function AgentManagement() {
         .from("users")
         .select("id, phone_number, invite_code, main_balance, game_balance, vip_level, created_at, is_agent");
 
-      if (isUUID)            q = q.eq("id", trimmed);
-      else if (isInviteCode) q = q.eq("invite_code", trimmed);
-      else if (isPhone)      q = q.eq("phone_number", trimmed);
-      else                   q = q.or(`invite_code.eq.${trimmed},phone_number.eq.${trimmed}`);
+      let data: any = null;
+      let fetchErr: any = null;
 
-      const { data, error: fetchErr } = await q.maybeSingle();
-      if (fetchErr || !data) { setError("User not found. Try phone, 6-digit invite code, or UUID."); return; }
+      if (isUUID) {
+        // Search by exact UUID
+        const result = await q.eq("id", trimmed).maybeSingle();
+        ({ data, error: fetchErr } = result);
+      } else if (isInviteCode) {
+        // Search by exact invite code
+        const result = await q.eq("invite_code", trimmed).maybeSingle();
+        ({ data, error: fetchErr } = result);
+      } else if (isPhone) {
+        // Search by exact phone number
+        const result = await q.eq("phone_number", trimmed).maybeSingle();
+        ({ data, error: fetchErr } = result);
+      } else {
+        // Search by id, invite_code, or phone_number using separate queries
+        // Must create separate query objects to avoid combining filters
+        console.log('🔍 [AgentManagement] Searching by id, invite_code, phone_number separately');
+        
+        const baseSelect = "id, phone_number, invite_code, main_balance, game_balance, vip_level, created_at, is_agent";
+        
+        const [idResult, codeResult, phoneResult] = await Promise.all([
+          (adminSupabase as any).from("users").select(baseSelect).eq("id", trimmed).maybeSingle(),
+          (adminSupabase as any).from("users").select(baseSelect).eq("invite_code", trimmed).maybeSingle(),
+          (adminSupabase as any).from("users").select(baseSelect).eq("phone_number", trimmed).maybeSingle()
+        ]);
+
+        // Use whichever result found a match
+        data = idResult.data || codeResult.data || phoneResult.data;
+        
+        // Only set error if ALL queries failed
+        if (!idResult.data && !codeResult.data && !phoneResult.data) {
+          fetchErr = idResult.error || codeResult.error || phoneResult.error;
+        }
+        
+        console.log('🔍 [AgentManagement] ID result:', idResult.data);
+        console.log('🔍 [AgentManagement] Code result:', codeResult.data);
+        console.log('🔍 [AgentManagement] Phone result:', phoneResult.data);
+      }
+
+      if (!data) { 
+        console.log('⚠️ [AgentManagement] No user found for:', trimmed);
+        setError("User not found. Try phone, 6-digit invite code, or UUID."); 
+        return; 
+      }
       const user = data as any;
 
       // Count direct members via referred_by
@@ -117,6 +164,14 @@ export function AgentManagement() {
         .from("users")
         .select("id", { count: "exact", head: true })
         .eq("referred_by", user.id);
+
+      // Fetch invited members (users who have this agent's invite_code as referred_by)
+      const { data: invitedMembers } = await (adminSupabase as any)
+        .from("users")
+        .select("id, invite_code, phone_number, created_at, total_deposit, total_bets")
+        .eq("referred_by", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50);
 
       setAgentData({
         id:                   user.id,
@@ -132,6 +187,14 @@ export function AgentManagement() {
         yesterday_commission: 0,
         status:               "active",
         is_agent:             Boolean(user.is_agent),
+        invited_members:      (invitedMembers || []).map((m: any) => ({
+          id:           m.id,
+          invite_code:  m.invite_code || "",
+          phone_number: m.phone_number || "",
+          created_at:   m.created_at || "",
+          total_deposit: Number(m.total_deposit || 0),
+          total_bets:   Number(m.total_bets || 0),
+        })),
       });
       setMobileTab("details");
     } catch {
@@ -198,13 +261,92 @@ export function AgentManagement() {
     }
   };
 
+  // ── Multi-UID Scanner ─────────────────────────────────────────────
+  const [scanUIDs, setScanUIDs]             = useState("");
+  const [scanResults, setScanResults]       = useState<any[]>([]);
+  const [scanLoading, setScanLoading]       = useState(false);
+
+  const handleMultiUIDScan = async () => {
+    if (!scanUIDs.trim()) return;
+    setScanLoading(true); setScanResults([]);
+    const uids = scanUIDs.split("\n").map(u => u.trim()).filter(Boolean);
+    try {
+      // Fetch all users by invite_code in one query
+      const { data: users, error: usersErr } = await (adminSupabase as any)
+        .from("users")
+        .select("invite_code, referred_by, registered_ip, main_balance, game_balance, phone_number")
+        .in("invite_code", uids);
+      if (usersErr) throw usersErr;
+
+      // Build a map of invite_code -> user data
+      const userMap = new Map((users || []).map((u: any) => [u.invite_code, u]));
+
+      // For each UID, fetch deposit and withdrawal totals from transactions
+      const results = await Promise.all(
+        uids.map(async (uid) => {
+          const user = userMap.get(uid) as any;
+          if (!user) {
+            return { uid, error: "Not found", parent_uid: "—", invite_url: "—", total_deposit: 0, total_withdrawal: 0, duplicate_ips: [] };
+          }
+
+          // Get total deposits
+          const { data: deposits } = await (adminSupabase as any)
+            .from("transactions")
+            .select("amount")
+            .eq("user_id", user.id)
+            .eq("type", "deposit")
+            .eq("status", "completed");
+
+          // Get total withdrawals
+          const { data: withdrawals } = await (adminSupabase as any)
+            .from("transactions")
+            .select("amount")
+            .eq("user_id", user.id)
+            .eq("type", "withdrawal")
+            .eq("status", "completed");
+
+          const totalDeposit = (deposits || []).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+          const totalWithdrawal = (withdrawals || []).reduce((sum: number, t: any) => sum + Number(t.amount || 0), 0);
+
+          // Find duplicate IPs: find all users with same registered_ip
+          let duplicateIPs: string[] = [];
+          if (user.registered_ip) {
+            const { data: sameIPUsers } = await (adminSupabase as any)
+              .from("users")
+              .select("invite_code, phone_number")
+              .eq("registered_ip", user.registered_ip)
+              .neq("id", user.id)
+              .limit(10);
+            duplicateIPs = (sameIPUsers || []).map((u: any) => u.invite_code || u.phone_number || "Unknown");
+          }
+
+          return {
+            uid,
+            parent_uid: user.referred_by || "None",
+            invite_url: `${window.location.origin}/register?ref=${user.invite_code || uid}`,
+            total_deposit: totalDeposit,
+            total_withdrawal: totalWithdrawal,
+            duplicate_ips: duplicateIPs,
+            phone: user.phone_number || "—",
+          };
+        })
+      );
+
+      setScanResults(results);
+    } catch (err: any) {
+      alert("Scan failed: " + (err?.message || "Unknown error"));
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
   // ── Shared: Agent Details content ────────────────────────────────
   const AgentDetails = () => agentData ? (
     <div className="space-y-4">
       {/* Info strip */}
       <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460] grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div><p className="text-gray-400 text-xs mb-1">UID</p><p className="text-amber-400 font-black text-xl font-mono">{agentData.invite_code || "------"}</p></div>
-        <div><p className="text-gray-400 text-xs mb-1">VIP</p><p className="text-amber-500 font-bold text-lg">{agentData.vip_level}</p></div>
+        <div><p className="text-gray-400 text-xs mb-1">UID</p><p className="text-orange-500 font-black text-xl font-mono">{agentData.invite_code || "------"}</p></div>
+        <div><p className="text-gray-400 text-xs mb-1">VIP</p><p className="text-orange-500 font-bold text-lg">{agentData.vip_level}</p></div>
         <div><p className="text-gray-400 text-xs mb-1">Since</p><p className="text-white font-bold text-sm">{new Date(agentData.created_at).toLocaleDateString()}</p></div>
         <div><p className="text-gray-400 text-xs mb-1">Status</p><p className="text-green-400 font-bold">Active</p></div>
       </div>
@@ -214,9 +356,9 @@ export function AgentManagement() {
         {[
           { label: "Direct Members", value: agentData.direct_members, color: "text-white" },
           { label: "Team Members",   value: agentData.team_members,   color: "text-white" },
-          { label: "Commission",     value: `Rs ${agentData.yesterday_commission.toLocaleString()}`, color: "text-amber-500" },
+          { label: "Commission",     value: `Rs ${agentData.yesterday_commission.toLocaleString()}`, color: "text-orange-500" },
         ].map(s => (
-          <div key={s.label} className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460]">
+          <div key={s.label} className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460] shadow-lg">
             <p className="text-gray-400 text-xs mb-1">{s.label}</p>
             <p className={`font-bold text-2xl ${s.color}`}>{s.value}</p>
           </div>
@@ -225,7 +367,7 @@ export function AgentManagement() {
 
       {/* Balances */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460]">
+        <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460] shadow-lg">
           <p className="text-gray-400 text-xs mb-1">Main Balance</p>
           <p className="text-white font-bold text-xl mb-3">Rs {agentData.main_balance.toLocaleString()}</p>
           <button onClick={() => setShowSalaryModal(true)}
@@ -233,7 +375,7 @@ export function AgentManagement() {
             Give Salary
           </button>
         </div>
-        <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460]">
+        <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460] shadow-lg">
           <p className="text-gray-400 text-xs mb-1">Game Balance</p>
           <p className="text-white font-bold text-xl mb-3">Rs {agentData.game_balance.toLocaleString()}</p>
           <button onClick={() => setShowAdvanceModal(true)}
@@ -244,15 +386,15 @@ export function AgentManagement() {
       </div>
 
       {/* Invite code + convert */}
-      <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460]">
+      <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460] shadow-lg">
         <p className="text-gray-400 text-xs mb-2">Invite Code (UID)</p>
         <div className="flex gap-2 mb-3">
           <div className="flex-1 bg-[#0f3460] border border-[#1a5f7a] px-4 py-2.5 rounded-lg flex items-center gap-2">
             <span className="text-gray-400 text-sm">UID |</span>
-            <span className="text-amber-400 font-black text-lg tracking-widest font-mono">{agentData.invite_code || "------"}</span>
+            <span className="text-orange-500 font-black text-lg tracking-widest font-mono">{agentData.invite_code || "------"}</span>
           </div>
           <button onClick={copyUID}
-            className={`px-4 rounded-lg font-bold transition-all min-h-[44px] min-w-[44px] ${copied ? "bg-green-500 text-white" : "bg-amber-500/30 text-amber-400 border border-amber-500/50"}`}>
+            className={`px-4 rounded-lg font-bold transition-all min-h-[44px] min-w-[44px] ${copied ? "bg-green-500 text-white" : "bg-orange-500/30 text-orange-400 border border-orange-500/50"}`}>
             {copied ? <Check size={18} /> : <Copy size={18} />}
           </button>
         </div>
@@ -270,6 +412,34 @@ export function AgentManagement() {
           {fraudLoading ? "🔍 Analyzing Network..." : "🛡️ Analyze Agent Fraud Network"}
         </button>
       </div>
+
+      {/* Invited Members List */}
+      {agentData.invited_members && agentData.invited_members.length > 0 && (
+        <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460] shadow-lg">
+          <h3 className="text-white font-bold text-sm mb-3">Invited Members ({agentData.invited_members.length})</h3>
+          <div className="space-y-2 max-h-[300px] overflow-y-auto">
+            {agentData.invited_members.map((member) => (
+              <div key={member.id} className="bg-[#0f3460] border border-[#1a5f7a] rounded-lg p-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-orange-500 font-bold text-xs font-mono">UID: {member.invite_code}</span>
+                  <span className="text-gray-400 text-[10px]">{new Date(member.created_at).toLocaleDateString()}</span>
+                </div>
+                <div className="text-gray-300 text-xs mb-1">Phone: {member.phone_number || "N/A"}</div>
+                <div className="grid grid-cols-2 gap-2 text-[10px]">
+                  <div>
+                    <span className="text-gray-500">Deposit:</span>
+                    <span className="text-green-400 font-bold ml-1">Rs {member.total_deposit.toLocaleString()}</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Bets:</span>
+                    <span className="text-white font-bold ml-1">Rs {member.total_bets.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   ) : (
     <div className="flex items-center justify-center py-16 text-gray-500 text-sm">
@@ -279,14 +449,14 @@ export function AgentManagement() {
 
   // ── Search panel content ──────────────────────────────────────────
   const SearchPanel = () => (
-    <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-5 border border-[#0f3460]">
+    <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-5 border border-[#0f3460] shadow-lg">
       <h3 className="text-white font-bold text-base mb-4">Find Agent</h3>
       <form onSubmit={handleFetchAgent} className="space-y-3">
         <input type="text" value={agentUID} onChange={e => setAgentUID(e.target.value)}
-          placeholder="Phone, 6-digit code, or UUID"
-          className="w-full bg-[#0f3460] border border-[#1a5f7a] text-white px-4 py-2.5 rounded-lg focus:border-amber-500 focus:outline-none text-sm" />
+          placeholder="Search by UID, phone, or invite code..."
+          className="w-full bg-[#0f3460] border border-[#1a5f7a] text-white px-4 py-2.5 rounded-lg focus:border-orange-500 focus:outline-none text-sm" />
         <button type="submit" disabled={loading}
-          className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 text-white font-bold rounded-lg disabled:opacity-50 min-h-[44px]">
+          className="w-full py-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white font-bold rounded-lg disabled:opacity-50 min-h-[44px]">
           {loading ? "Searching..." : "Search Agent"}
         </button>
       </form>
@@ -308,13 +478,13 @@ export function AgentManagement() {
             ) : agents.map(agent => (
               <button key={agent.id}
                 onClick={() => { setAgentUID(agent.uid); setAgentListOpen(false); }}
-                className="w-full rounded-lg border border-[#1a5f7a] bg-[#0f3460]/70 p-3 text-left hover:border-amber-500/50 transition-all">
+                className="w-full rounded-lg border border-[#1a5f7a] bg-[#0f3460]/70 p-3 text-left hover:border-orange-500/50 transition-all">
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-white text-sm font-semibold">{agent.username}</p>
                     <p className="text-gray-400 text-xs">{agent.phone}</p>
                   </div>
-                  <span className="text-xs text-amber-400 font-mono">{agent.uid}</span>
+                  <span className="text-xs text-orange-500 font-mono">{agent.uid}</span>
                 </div>
               </button>
             ))}
@@ -329,7 +499,7 @@ export function AgentManagement() {
       <div className="p-4 md:p-8">
         {/* Header */}
         <div className="mb-5 md:mb-8">
-          <h1 className="text-2xl md:text-4xl font-bold text-white mb-1">Agent Management</h1>
+          <h1 className="text-2xl md:text-4xl font-bold text-orange-500 mb-1">Agent Management</h1>
           <p className="text-gray-400 text-sm">Search, manage agents, and handle commissions</p>
         </div>
 
@@ -341,7 +511,7 @@ export function AgentManagement() {
               <button key={tab} onClick={() => setMobileTab(tab)}
                 className={`flex-1 py-2.5 rounded-lg font-bold text-sm min-h-[44px] transition-all capitalize ${
                   mobileTab === tab
-                    ? "bg-amber-500 text-black"
+                    ? "bg-orange-500 text-black"
                     : "bg-[#1a1a2e] text-gray-400 border border-[#0f3460]"
                 }`}>
                 {tab === "search" ? "🔍 Search" : `📋 Details${agentData ? ` · ${agentData.invite_code}` : ""}`}
@@ -361,20 +531,22 @@ export function AgentManagement() {
         </div>
 
         {/* ── DESKTOP layout ────────────────────────────────────────── */}
-        <div className="hidden md:grid grid-cols-4 gap-6" style={{ minHeight: "calc(100vh - 220px)" }}>
-          {/* Left panel */}
-          <div className="col-span-1 overflow-y-auto">
+        <div className="hidden md:block">
+          {/* Search Panel - Side Aligned */}
+          <div className="mb-6">
             <SearchPanel />
           </div>
 
-          {/* Right panel */}
-          <div className="col-span-3 overflow-y-auto">
-            {agentData ? <AgentDetails /> : (
-              <div className="flex items-center justify-center h-full bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460]">
-                <p className="text-gray-500 text-lg">Enter an agent UID or phone to view details</p>
-              </div>
-            )}
-          </div>
+          {/* Details Panel - Side Aligned */}
+          {agentData ? (
+            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460] shadow-2xl p-6">
+              <AgentDetails />
+            </div>
+          ) : (
+            <div className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl border border-[#0f3460] shadow-2xl p-12 text-center">
+              <p className="text-gray-500 text-lg">Enter an agent UID or phone to view details</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -411,44 +583,124 @@ export function AgentManagement() {
       {/* Fraud Analysis Modal */}
       {showFraudModal && fraudResult && (
         <Modal title="🛡️ Agent Fraud Network Analysis" onClose={() => { setShowFraudModal(false); setFraudResult(null); }}>
-          <div className="space-y-3 text-sm">
-            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-              <p className="text-red-400 text-xs font-bold mb-1">Total Multi-Account Network Base</p>
-              <p className="text-white font-black text-xl">{fraudResult.total_network_accounts ?? "—"}</p>
-              <p className="text-gray-400 text-xs">Identical registration IP clusters</p>
+          <div className="space-y-4 text-sm max-h-[70vh] overflow-y-auto">
+            {/* Original Fraud Analysis Results */}
+            <div className="space-y-3">
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                <p className="text-red-400 text-xs font-bold mb-1">Total Multi-Account Network Base</p>
+                <p className="text-white font-black text-xl">{fraudResult.total_network_accounts ?? "—"}</p>
+                <p className="text-gray-400 text-xs">Identical registration IP clusters</p>
+              </div>
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
+                <p className="text-emerald-400 text-xs font-bold mb-1">Verified Unique Genuine Profiles</p>
+                <p className="text-white font-black text-xl">{fraudResult.unique_genuine_profiles ?? "—"}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
+                  <p className="text-blue-400 text-xs font-bold mb-1">Today's Deposits</p>
+                  <p className="text-white font-bold">Rs {(fraudResult.today_deposits ?? 0).toLocaleString()}</p>
+                </div>
+                <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
+                  <p className="text-purple-400 text-xs font-bold mb-1">Today's Withdrawals</p>
+                  <p className="text-white font-bold">Rs {(fraudResult.today_withdrawals ?? 0).toLocaleString()}</p>
+                </div>
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+                  <p className="text-amber-400 text-xs font-bold mb-1">Lifetime Deposits</p>
+                  <p className="text-white font-bold">Rs {(fraudResult.lifetime_deposits ?? 0).toLocaleString()}</p>
+                </div>
+                <div className="bg-pink-500/10 border border-pink-500/30 rounded-lg p-3">
+                  <p className="text-pink-400 text-xs font-bold mb-1">Lifetime Withdrawals</p>
+                  <p className="text-white font-bold">Rs {(fraudResult.lifetime_withdrawals ?? 0).toLocaleString()}</p>
+                </div>
+              </div>
+              {fraudResult.flagged_accounts && fraudResult.flagged_accounts.length > 0 && (
+                <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3">
+                  <p className="text-red-400 text-xs font-bold mb-2">Flagged Accounts</p>
+                  {fraudResult.flagged_accounts.map((acc: any, idx: number) => (
+                    <div key={idx} className="text-xs text-gray-300 mb-1">
+                      • {acc.phone || acc.invite_code} — {acc.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
-              <p className="text-emerald-400 text-xs font-bold mb-1">Verified Unique Genuine Profiles</p>
-              <p className="text-white font-black text-xl">{fraudResult.unique_genuine_profiles ?? "—"}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3">
-                <p className="text-blue-400 text-xs font-bold mb-1">Today's Deposits</p>
-                <p className="text-white font-bold">Rs {(fraudResult.today_deposits ?? 0).toLocaleString()}</p>
-              </div>
-              <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
-                <p className="text-purple-400 text-xs font-bold mb-1">Today's Withdrawals</p>
-                <p className="text-white font-bold">Rs {(fraudResult.today_withdrawals ?? 0).toLocaleString()}</p>
-              </div>
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
-                <p className="text-amber-400 text-xs font-bold mb-1">Lifetime Deposits</p>
-                <p className="text-white font-bold">Rs {(fraudResult.lifetime_deposits ?? 0).toLocaleString()}</p>
-              </div>
-              <div className="bg-pink-500/10 border border-pink-500/30 rounded-lg p-3">
-                <p className="text-pink-400 text-xs font-bold mb-1">Lifetime Withdrawals</p>
-                <p className="text-white font-bold">Rs {(fraudResult.lifetime_withdrawals ?? 0).toLocaleString()}</p>
-              </div>
-            </div>
-            {fraudResult.flagged_accounts && fraudResult.flagged_accounts.length > 0 && (
-              <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3">
-                <p className="text-red-400 text-xs font-bold mb-2">Flagged Accounts</p>
-                {fraudResult.flagged_accounts.map((acc: any, idx: number) => (
-                  <div key={idx} className="text-xs text-gray-300 mb-1">
-                    • {acc.phone || acc.invite_code} — {acc.reason}
+
+            {/* Multi-UID Scanner */}
+            <div className="border-t border-[#0f3460] pt-4">
+              <h4 className="text-white font-bold text-base mb-3">🔍 Multi-UID Scanner</h4>
+              <div className="space-y-3">
+                <div>
+                  <label className="text-gray-400 text-xs font-bold mb-2 block">
+                    Paste Agent UIDs to Scan (one per line)
+                  </label>
+                  <textarea
+                    value={scanUIDs}
+                    onChange={e => setScanUIDs(e.target.value)}
+                    placeholder="Enter UIDs, one per line...&#10;123456&#10;789012&#10;345678"
+                    className="w-full bg-[#0f3460] border border-[#1a5f7a] text-white px-4 py-3 rounded-lg focus:border-orange-500 focus:outline-none text-sm min-h-[120px] resize-y"
+                  />
+                </div>
+                <button
+                  onClick={handleMultiUIDScan}
+                  disabled={scanLoading || !scanUIDs.trim()}
+                  className="w-full py-3 bg-gradient-to-r from-orange-500 to-orange-600 text-white font-bold rounded-lg disabled:opacity-50 min-h-[44px]">
+                  {scanLoading ? "🔍 Scanning..." : "Start Scan"}
+                </button>
+
+                {/* Scan Results */}
+                {scanResults.length > 0 && (
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    <p className="text-gray-400 text-xs font-bold">Scan Results ({scanResults.length})</p>
+                    {scanResults.map((result, idx) => (
+                      <div key={idx} className="bg-[#0f3460] border border-[#1a5f7a] rounded-lg p-3 text-xs">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-orange-500 font-bold font-mono">UID: {result.uid}</span>
+                          {result.error && <span className="text-red-400">{result.error}</span>}
+                        </div>
+                        {!result.error && (
+                          <>
+                            <div className="grid grid-cols-2 gap-2 mb-2">
+                              <div>
+                                <p className="text-gray-500 text-[10px]">Parent UID</p>
+                                <p className="text-white font-mono">{result.parent_uid}</p>
+                              </div>
+                              <div>
+                                <p className="text-gray-500 text-[10px]">Total Deposit</p>
+                                <p className="text-green-400 font-bold">Rs {result.total_deposit.toLocaleString()}</p>
+                              </div>
+                              <div>
+                                <p className="text-gray-500 text-[10px]">Total Withdrawal</p>
+                                <p className="text-red-400 font-bold">Rs {result.total_withdrawal.toLocaleString()}</p>
+                              </div>
+                              <div>
+                                <p className="text-gray-500 text-[10px]">Phone</p>
+                                <p className="text-gray-300">{result.phone}</p>
+                              </div>
+                            </div>
+                            <div className="mb-2">
+                              <p className="text-gray-500 text-[10px]">Invite URL</p>
+                              <p className="text-blue-400 break-all">{result.invite_url}</p>
+                            </div>
+                            {result.duplicate_ips.length > 0 && (
+                              <div>
+                                <p className="text-red-400 text-[10px] font-bold mb-1">⚠️ Duplicate IPs ({result.duplicate_ips.length})</p>
+                                <div className="flex flex-wrap gap-1">
+                                  {result.duplicate_ips.map((ip: string, i: number) => (
+                                    <span key={i} className="bg-red-500/20 text-red-300 px-2 py-0.5 rounded text-[10px]">
+                                      {ip}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
-            )}
+            </div>
           </div>
         </Modal>
       )}

@@ -40,7 +40,7 @@ const enforceAbuseGuards = async (ip: string, phone: string): Promise<AbuseGuard
 
   // 2) Log IP+phone registration attempts for manual review.
   try {
-    await supabaseAdmin.from('registration_attempts').insert({ ip, phone_number: phone });
+    await (supabaseAdmin as any).from('registration_attempts').insert({ ip, phone_number: phone });
   } catch {
     // ignore logging failures; do not block registration
   }
@@ -52,22 +52,18 @@ const isValidInvitationCodeFormat = (raw: string) => {
   const code = String(raw || '').trim();
   if (!code) return false;
 
-  // Accept either:
-  // 1) digits-only, minimum 6 digits (e.g. 123456)
-  // 2) WW + 6 chars (current backend generates WWxxxxxx)
+  // Accept 9-digit numeric codes only (e.g. 123456789)
   const digitsOnly = code.replace(/\D/g, '');
-  const digitsOk = digitsOnly.length >= 6 && digitsOnly.length === code.length;
-  const wwOk = /^WW[A-Za-z0-9]{6}$/.test(code);
-  return digitsOk || wwOk;
+  return digitsOnly.length === 9 && digitsOnly.length === code.length;
 };
 
 /**
- * Generate a unique alphanumeric invite/referral code and fall back safely if the
- * database query itself fails or the schema rejects the lookup.
+ * Generate a unique 9-digit numeric invite/referral code
  */
 const generateInviteCode = async (): Promise<string> => {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const candidate = Math.random().toString(36).substring(2, 8).toUpperCase();
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    // Generate 9-digit numeric code (100000000 to 999999999)
+    const candidate = Math.floor(100000000 + Math.random() * 900000000).toString();
 
     try {
       const { data, error } = await supabaseAdmin
@@ -90,7 +86,8 @@ const generateInviteCode = async (): Promise<string> => {
     }
   }
 
-  return `WW${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  // Fallback: use timestamp-based 9-digit code
+  return Date.now().toString().slice(-9);
 };
 
 router.post('/register', async (req, res) => {
@@ -121,69 +118,29 @@ router.post('/register', async (req, res) => {
       }
 
       const normalizedInvitationCode = invitationCode.replace(/[^A-Za-z0-9]/g, '');
-      const numericMatch = normalizedInvitationCode.match(/^\d{6,}$/);
-      const referralMatch = normalizedInvitationCode.match(/^WW[A-Za-z0-9]{6}$/);
+      
+      // Only accept 9-digit numeric codes
+      const numericMatch = normalizedInvitationCode.match(/^\d{9}$/);
 
       let referrer: any = null;
       let refErr: any = null;
 
       console.log('🔍 REFERRAL DEBUG - Looking up invitation code:', normalizedInvitationCode);
 
-      if (referralMatch) {
-        // Try matching as WWxxxxxx format in public.users
-        ({ data: referrer, error: refErr } = await supabaseAdmin
-          .from('users')
-          .select('id, referral_code, invite_code')
-          .or(`referral_code.eq.${normalizedInvitationCode},invite_code.eq.${normalizedInvitationCode}`)
-          .maybeSingle());
-          
-        console.log('🔍 REFERRAL DEBUG - WW format lookup result:', { referrer, refErr });
-      } else if (numericMatch) {
-        // Numeric code - look up directly in public.users
-        const baseCode = normalizedInvitationCode.slice(0, 6);
-        console.log('🔍 REFERRAL DEBUG - Numeric code detected, looking up referral_code:', baseCode);
+      if (numericMatch) {
+        // 9-digit numeric code - look up directly in public.users
+        console.log('🔍 REFERRAL DEBUG - 9-digit code detected, looking up referral_code:', normalizedInvitationCode);
         
-        // First try exact match
-        ({ data: referrer, error: refErr } = await supabaseAdmin
-          .from('users')
-          .select('id, referral_code')
-          .eq('referral_code', baseCode)
-          .maybeSingle());
-          
-        console.log('🔍 REFERRAL DEBUG - Numeric exact lookup result:', { referrer, refErr });
-        
-        // If not found, try with WW prefix
-        if (!referrer && !refErr) {
-          console.log('🔍 REFERRAL DEBUG - Trying WW prefix lookup for:', `WW${baseCode}`);
-          ({ data: referrer, error: refErr } = await supabaseAdmin
-            .from('users')
-            .select('id, referral_code')
-            .eq('referral_code', `WW${baseCode}`)
-            .maybeSingle());
-            
-          console.log('🔍 REFERRAL DEBUG - WW prefix lookup result:', { referrer, refErr });
-        }
-
-        // If still not found, try phone_number
-        if (!referrer && !refErr) {
-          console.log('🔍 REFERRAL DEBUG - Trying phone_number lookup for:', normalizedInvitationCode);
-          ({ data: referrer, error: refErr } = await supabaseAdmin
-            .from('users')
-            .select('id, referral_code')
-            .eq('phone_number', normalizedInvitationCode)
-            .maybeSingle());
-            
-          console.log('🔍 REFERRAL DEBUG - Phone number lookup result:', { referrer, refErr });
-        }
-      } else {
-        // Fallback: exact match on referral_code
         ({ data: referrer, error: refErr } = await supabaseAdmin
           .from('users')
           .select('id, referral_code')
           .eq('referral_code', normalizedInvitationCode)
           .maybeSingle());
           
-        console.log('🔍 REFERRAL DEBUG - Fallback lookup result:', { referrer, refErr });
+        console.log('🔍 REFERRAL DEBUG - 9-digit lookup result:', { referrer, refErr });
+      } else {
+        // Invalid format
+        console.log('🔍 REFERRAL DEBUG - Invalid invitation code format:', normalizedInvitationCode);
       }
 
       if (refErr) {
@@ -217,13 +174,13 @@ router.post('/register', async (req, res) => {
       ({ data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
         email: userEmail,
         password,
-        user_metadata: { phone: cleanPhone }
+        user_metadata: { phone: cleanPhone, phone_number: cleanPhone }  // both keys for trigger compatibility
       } as any));
     } else {
       ({ data: authData, error: authError } = await supabaseAdmin.auth.signUp({
         email: userEmail,
         password,
-        options: { data: { phone: cleanPhone } }
+        options: { data: { phone: cleanPhone, phone_number: cleanPhone } }
       }));
     }
 
@@ -236,41 +193,23 @@ router.post('/register', async (req, res) => {
     const referral_code = await generateInviteCode();
     console.log('📋 Generated invite/referral code for new user:', referral_code);
 
-    // 3. Insert into public.users table with resilient fallbacks for schema drift
-    const userPayloads = [
-      {
+    // 3. Insert into public.users — use upsert with on conflict do nothing because
+    //    the handle_new_user trigger on auth.users may have already created the row.
+    //    If it hasn't (e.g. trigger not installed or failed silently), we create it now.
+    const { error: userInsertError } = await supabaseAdmin
+      .from('users')
+      .upsert({
         id: userId,
         phone_number: cleanPhone,
         referral_code,
         invite_code: referral_code,
         referred_by: referrerId,
         created_at: new Date().toISOString(),
-      },
-      {
-        id: userId,
-        phone_number: cleanPhone,
-        referral_code,
-        created_at: new Date().toISOString(),
-      },
-      {
-        id: userId,
-        phone_number: cleanPhone,
-        created_at: new Date().toISOString(),
-      },
-    ];
-
-    let userInsertError: any = null;
-    for (const payload of userPayloads) {
-      const { error } = await supabaseAdmin.from('users').insert(payload as any);
-      if (!error) {
-        userInsertError = null;
-        break;
-      }
-      userInsertError = error;
-    }
+        updated_at: new Date().toISOString(),
+      } as any, { onConflict: 'id', ignoreDuplicates: false });
 
     if (userInsertError) {
-      console.error('❌ User Insert Error:', {
+      console.error('❌ User Upsert Error:', {
         message: userInsertError?.message,
         details: userInsertError?.details,
         hint: userInsertError?.hint,

@@ -15,6 +15,7 @@ export interface Database {
           main_balance: number | null;
           game_balance: number | null;
           total_bets: number | null;
+          total_deposit: number | null;
           vip_level: number | null;
           is_agent: boolean | null;
           agent_id: string | null;
@@ -71,9 +72,35 @@ export interface Database {
         Update: { id?: string; user_id?: string; main_balance?: number | null; game_balance?: number | null };
       };
       transactions: {
-        Row: { id: string; user_id: string; type: string; amount: number; status: string; gateway_ref: string | null; created_at: string };
-        Insert: { id?: string; user_id: string; type: string; amount: number; status: string; gateway_ref?: string | null; created_at?: string };
-        Update: { id?: string; user_id?: string; type?: string; amount?: number; status?: string; gateway_ref?: string | null };
+        Row: { 
+          id: string; 
+          user_id: string; 
+          type: string; 
+          amount: number; 
+          bonus: number | null;
+          status: string; 
+          gateway_ref: string | null; 
+          created_at: string 
+        };
+        Insert: { 
+          id?: string; 
+          user_id: string; 
+          type: string; 
+          amount: number; 
+          bonus?: number | null;
+          status: string; 
+          gateway_ref?: string | null; 
+          created_at?: string 
+        };
+        Update: { 
+          id?: string; 
+          user_id?: string; 
+          type?: string; 
+          amount?: number; 
+          bonus?: number | null;
+          status?: string; 
+          gateway_ref?: string | null 
+        };
       };
       withdraw_requests: {
         Row: { id: string; user_id: string; amount: number; bank_name: string; account_name: string; account_number: string; status: string; created_at: string };
@@ -88,7 +115,79 @@ export interface Database {
       betting_history: {
         Row: { id: string; user_id: string; amount: number; created_at: string };
         Insert: { id?: string; user_id: string; amount: number; created_at?: string };
+        Update: { user_id?: string; amount?: number };
+      };
+      gift_code_claims: {
+        Row: { id: string; user_id: string; gift_code: string; amount: number; created_at: string };
+        Insert: { id?: string; user_id: string; gift_code: string; amount: number; created_at?: string };
+        Update: { id?: string; user_id?: string; gift_code?: string; amount?: number };
+      };
+      deposit_history: {
+        Row: { 
+          id: string; 
+          user_id: string; 
+          amount: number; 
+          status: string; 
+          gateway_ref: string | null; 
+          order_id: string | null;
+          method: string | null;
+          remarks: string | null;
+          created_at: string;
+          updated_at: string | null;
+        };
+        Insert: { 
+          id?: string; 
+          user_id: string; 
+          amount: number; 
+          status?: string; 
+          gateway_ref?: string | null; 
+          order_id?: string | null;
+          method?: string | null;
+          remarks?: string | null;
+          created_at?: string;
+          updated_at?: string | null;
+        };
+        Update: { 
+          id?: string; 
+          user_id?: string; 
+          amount?: number; 
+          status?: string; 
+          gateway_ref?: string | null;
+          order_id?: string | null;
+          method?: string | null;
+          remarks?: string | null;
+          updated_at?: string | null;
+        };
+      };
+      withdrawal_history: {
+        Row: { id: string; user_id: string; amount: number; method: string; account_number: string; account_name: string; status: string; gateway_ref: string | null; created_at: string };
+        Insert: { id?: string; user_id: string; amount: number; method?: string; account_number?: string; account_name?: string; status?: string; gateway_ref?: string | null; created_at?: string };
+        Update: { id?: string; user_id?: string; amount?: number; status?: string; gateway_ref?: string | null };
+      };
+      referral_commissions: {
+        Row: { id: string; user_id: string; amount: number; created_at: string };
+        Insert: { id?: string; user_id: string; amount: number; created_at?: string };
         Update: { id?: string; user_id?: string; amount?: number };
+      };
+      registration_attempts: {
+        Row: { id: string; ip: string; phone_number: string; created_at: string };
+        Insert: { id?: string; ip: string; phone_number: string; created_at?: string };
+        Update: { id?: string; ip?: string; phone_number?: string };
+      };
+      platform_settings: {
+        Row: { id: string; platform_name: string; platform_margin_target: number; game_control_enabled: boolean; smart_risk_default: boolean; notifications_enabled: boolean; auto_approve_deposit: boolean; created_at: string };
+        Insert: { id?: string; platform_name?: string; platform_margin_target?: number; game_control_enabled?: boolean; smart_risk_default?: boolean; notifications_enabled?: boolean; auto_approve_deposit?: boolean; created_at?: string };
+        Update: { id?: string; platform_name?: string; platform_margin_target?: number; game_control_enabled?: boolean; smart_risk_default?: boolean; notifications_enabled?: boolean; auto_approve_deposit?: boolean };
+      };
+      game_rounds: {
+        Row: { id: string; game_type: string; round_number: number; start_time: string; end_time: string; result: string | null; status: string; target_result: string | null; total_big: number; total_small: number; created_at: string };
+        Insert: { id?: string; game_type?: string; round_number?: number; start_time?: string; end_time?: string; result?: string | null; status?: string; target_result?: string | null; total_big?: number; total_small?: number; created_at?: string };
+        Update: { id?: string; game_type?: string; round_number?: number; start_time?: string; end_time?: string; result?: string | null; status?: string; target_result?: string | null; total_big?: number; total_small?: number };
+      };
+      user_banks: {
+        Row: { id: string; user_id: string; bank_name: string; account_name: string; account_number: string; created_at: string };
+        Insert: { id?: string; user_id: string; bank_name?: string; account_name?: string; account_number?: string; created_at?: string };
+        Update: { id?: string; user_id?: string; bank_name?: string; account_name?: string; account_number?: string };
       };
     };
   };

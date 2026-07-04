@@ -3,7 +3,7 @@ import { Check, X, Clock, RefreshCw, Search, Eye } from "lucide-react";
 import { adminSupabase } from "../../lib/adminSupabase";
 import { useAdmin } from "../context/AdminContext";
 
-type RequestStatus = "pending" | "approved" | "rejected" | "completed" | "failed";
+type RequestStatus = "pending" | "approved" | "processing" | "rejected" | "completed" | "failed";
 
 interface FundsRequest {
   id: string;
@@ -137,6 +137,47 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
 
   useEffect(() => { fetchRequests(); }, [type]);
 
+  // ── Polling fallback for withdrawals stuck in "processing" ─────
+  // If the webhook URL is not configured or PKPay didn't deliver,
+  // this polls the gateway status to sync the withdrawal.
+  useEffect(() => {
+    if (type !== "withdraw") return;
+    
+    const intervalId = setInterval(async () => {
+      const processingRequests = requests.filter(r => r.status === "processing");
+      if (processingRequests.length === 0) return;
+      
+      console.log(`[poll] Checking ${processingRequests.length} stuck processing withdrawals...`);
+      
+      for (const req of processingRequests) {
+        try {
+          // Call the payout endpoint with status-check flag
+          const response = await fetch("/api/payout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              withdrawal_id: req.id,
+              adminSecretToken: import.meta.env.VITE_ADMIN_INTERNAL_MUTATION_KEY,
+              __check_only: true,  // signal to backend: just check status, don't resend
+            }),
+          });
+          
+          const data = await response.json();
+          if (data.success) {
+            console.log(`[poll] Withdrawal ${req.id} resolved: ${data.message}`);
+            await fetchRequests();  // Refresh the list
+            break;  // One update at a time
+          }
+        } catch (err) {
+          console.warn(`[poll] Error checking ${req.id}:`, err);
+        }
+      }
+    }, 10000);  // Poll every 10 seconds
+    
+    return () => clearInterval(intervalId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [type, requests]);
+
   // Filter
   useEffect(() => {
     let r = requests;
@@ -151,88 +192,66 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
   const handleApprove = async () => {
     if (!selected || isSubAdmin) return;
     setActing(true); setError("");
+
+    // ── MANUAL WITHDRAWAL MODE ────────────────────────────────────
+    // Admin clicks "Approve" → we update withdrawal_history to 'completed'
+    // WITHOUT calling the PKPay Payout API. The admin must manually
+    // transfer funds via the PKPay Dashboard.
+    const withdrawalId = selected.id;
+    const alreadyCompleted = selected.status === "completed";
+
+    if (alreadyCompleted) {
+      setError("This withdrawal was already completed.");
+      setActing(false);
+      return;
+    }
+
     try {
-      // ── Step 1: Call approve_withdrawal RPC ─────────────────────
-      const { data: approveData, error: approveErr } = await sb.rpc("approve_withdrawal", { p_withdrawal_id: selected.id });
-      if (approveErr) throw new Error(`RPC Error: ${approveErr.message}`);
-
-      // ── Step 2: Call PKPay Payout API ───────────────────────────
-      try {
-        const payoutRes = await fetch("/api/payout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            withdrawal_id:  selected.id,
-            amount:         selected.amount,
-            method:         selected.method,
-            account_number: selected.account_number,
-            account_name:   selected.account_name,
-          }),
-        });
-        
-        // Safe JSON parsing with content-type validation
-        const contentType = payoutRes.headers.get("content-type");
-        let payoutData: any;
-        if (contentType && contentType.includes("application/json")) {
-          const text = await payoutRes.text();
-          payoutData = text ? JSON.parse(text) : { success: false, message: "Empty JSON response received from merchant node." };
+      // Step 1: Call approve_withdrawal RPC to deduct balance and set processing
+      const { data: approveData, error: approveErr } = await sb.rpc("approve_withdrawal", { p_withdrawal_id: withdrawalId });
+      
+      if (approveErr) {
+        const errMsg = (approveErr?.message || "").toLowerCase();
+        if (errMsg.includes("already_processed") || errMsg.includes("already finalized")) {
+          console.log(`[approve] ${withdrawalId} already processed — finalizing as completed.`);
         } else {
-          const plainText = await payoutRes.text();
-          payoutData = { success: false, message: plainText || "Gateway returned non-JSON text headers." };
+          throw new Error(`RPC Error: ${approveErr.message}`);
         }
-
-        if (!payoutRes.ok || !payoutData.success) {
-          // Gateway rejected — capture EXACT error message and write to remarks
-          const gatewayError = payoutData.error || payoutData.message || `HTTP ${payoutRes.status}`;
-          const reasonMsg = `Gateway Error: ${gatewayError}`;
-
-          // Write error into remarks column so admin can see exact failure reason
-          await sb.from("withdrawal_history").update({
-            status: "failed",
-            reason: reasonMsg,
-            remarks: reasonMsg,
-            updated_at: new Date().toISOString(),
-          }).eq("id", selected.id);
-
-          // Refund balance
-          await sb.rpc("fail_withdrawal", {
-            p_withdrawal_id: selected.id,
-            p_reason: reasonMsg,
-          });
-
-          setError(`❌ ${reasonMsg}`);
-          await fetchRequests();
-          return;
-        }
-
-        // Success — status moves to 'completed' via webhook
-        setError("");
-        await fetchRequests();
-
-      } catch (gatewayErr: any) {
-        // Network error or exception — capture message
-        const reasonMsg = `Gateway Exception: ${gatewayErr?.message || "Unknown gateway error"}`;
-
-        // Write error into remarks for admin visibility
-        await sb.from("withdrawal_history").update({
-          status: "failed",
-          reason: reasonMsg,
-          remarks: reasonMsg,
-          updated_at: new Date().toISOString(),
-        }).eq("id", selected.id);
-
-        // Refund balance
-        await sb.rpc("fail_withdrawal", {
-          p_withdrawal_id: selected.id,
-          p_reason: reasonMsg,
-        });
-
-        setError(`❌ ${reasonMsg}`);
-        await fetchRequests();
-        return;
       }
 
+      // Step 2: Directly mark as completed — NO PKPay API call
+      await sb.from("withdrawal_history").update({
+        status: "completed",
+        gateway_ref: `MANUAL:${Date.now()}`,
+        reason: null,
+        gateway_error_logs: null,
+        updated_at: new Date().toISOString(),
+      }).eq("id", withdrawalId);
+
+      // Step 3: Update local state optimistically
+      setRequests((prevList: any[]) =>
+        prevList.map(item =>
+          item.id === withdrawalId ? { ...item, status: "completed" as RequestStatus, reason: null } : item
+        )
+      );
+      setSelected((prev) => prev?.id === withdrawalId ? { ...prev, status: "completed" as RequestStatus, reason: null } : prev);
+
+      // Step 4: Show manual transfer alert
+      const manualMsg = "Status updated to Success. Admin must manually transfer funds via PKPay Dashboard.";
+      setError(`✅ ${manualMsg}`);
+      
+      // Clear success message after 8 seconds
+      setTimeout(() => setError(""), 8000);
+      
+      await fetchRequests();
+
     } catch (err: any) {
+      setRequests((prevList: any[]) =>
+        prevList.map(item =>
+          item.id === withdrawalId ? { ...item, status: "pending" as RequestStatus } : item
+        )
+      );
+      setSelected((prev) => prev?.id === withdrawalId ? { ...prev, status: "pending" as RequestStatus } : prev);
       setError(err?.message || "Approve failed");
       await fetchRequests();
     } finally { setActing(false); }
@@ -304,20 +323,18 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           <span className="text-gray-400">Status</span>
           <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${S[req.status]}`}>{req.status}</span>
         </div>
-        {/* Show gateway error remarks when failed/rejected */}
-        {(req.status === "rejected" || req.status === "failed") && req.reason && (
+        {/* Show gateway error logs when failed/pending with error */}
+        {(req.status === "failed" || req.status === "pending") && req.remarks && (
           <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
-            <p className="text-red-400 text-xs font-bold mb-1">
-              {req.status === "failed" ? "Gateway Error Details" : "Rejection Reason"}
-            </p>
-            <p className="text-gray-300 text-xs">{req.reason}</p>
+            <p className="text-red-400 text-xs font-bold mb-1">Gateway Error Details</p>
+            <p className="text-gray-300 text-xs">{req.remarks}</p>
           </div>
         )}
-        {/* Show remarks column if set (contains extra error context) */}
-        {(req.status === "rejected" || req.status === "failed") && req.remarks && req.remarks !== req.reason && (
+        {/* Show gateway_error_logs if set (contains extra error context from payout backend) */}
+        {(req.status === "pending" || req.status === "failed") && req.reason && req.reason !== req.remarks && (
           <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-2">
-            <p className="text-amber-400 text-[10px] font-bold mb-0.5">Remarks</p>
-            <p className="text-gray-400 text-[10px]">{req.remarks}</p>
+            <p className="text-amber-400 text-[10px] font-bold mb-0.5">Gateway Error Log</p>
+            <p className="text-gray-400 text-[10px]">{req.reason}</p>
           </div>
         )}
       </div>

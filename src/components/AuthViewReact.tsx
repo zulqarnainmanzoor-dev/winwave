@@ -172,7 +172,7 @@ export default function AuthView({
             .eq("invite_code", normalizedCode)
             .maybeSingle();
 
-          if (refErr || !referrerRow?.id) {
+          if (refErr || !(referrerRow as any)?.id) {
             setError(
               language === "EN"
                 ? `Invite code "${normalizedCode}" is invalid. Please check and try again.`
@@ -181,7 +181,7 @@ export default function AuthView({
             setLoading(false);
             return;
           }
-          referrerUuid = referrerRow.id;
+          referrerUuid = (referrerRow as any).id;
         }
 
         // 1. Sign up the user with Supabase Auth
@@ -230,18 +230,20 @@ export default function AuthView({
 
         // 3. Insert the user's details into public.users with proper referral binding
         //    Force bind the validated invitation token to the user record
-        const { error: insertErr } = await supabase.from("users").insert({
-          id: data.user?.id,
-          phone_number: normalizedPhone,
-          invite_code: newInviteCode,
-          inviter_code: inviterCode ? inviterCode.trim().toUpperCase() : null,
-          referred_by: inviterCode ? inviterCode.trim().toUpperCase() : null,
-          parent_agent_id: referrerUuid,
-          total_invitees: 0,
-          main_balance: 0,
-          status: "active",
-          is_active: true,
-        });
+        const { error: insertErr } = await (supabase as any)
+          .from("users")
+          .insert({
+            id: (data.user as any)?.id,
+            phone_number: normalizedPhone,
+            invite_code: newInviteCode,
+            inviter_code: inviterCode ? inviterCode.trim().toUpperCase() : null,
+            referred_by: inviterCode ? inviterCode.trim().toUpperCase() : null,
+            parent_agent_id: referrerUuid,
+            total_invitees: 0,
+            main_balance: 0,
+            status: "active",
+            is_active: true,
+          });
 
         // Ignore duplicate key errors (23505) – row may have been created by a trigger
         if (insertErr && insertErr.code !== "23505") {

@@ -43,9 +43,9 @@ const TAB_TO_MODE: Record<string, WinGoMode> = {
   "Win Go 5Min": "5m",
 };
 
-export default function WinGoView({ onBack }: { onBack: () => void }) {
+export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: { onBack: () => void; onWithdrawClick?: () => void; onDepositClick?: () => void }) {
   const { t } = useLanguage();
-  const { thirdPartyWalletBalance, setThirdPartyWalletBalance, addWageringProgress, wageringRequired, wageringCompleted } = useUser();
+  const { thirdPartyWalletBalance, setThirdPartyWalletBalance, addWageringProgress, wageringRequired, wageringCompleted, uid } = useUser();
   const { isMuted, toggleMute, play } = useSound();
   const platformName = usePlatformName("WinWave");
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -73,7 +73,26 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
   const [betAmount, setBetAmount] = useState<number>(1);
   const [betQuantity, setBetQuantity] = useState<number>(1);
   const [betMultiplier, setBetMultiplier] = useState<number>(1);
-  const [myBets, setMyBets] = useState<any[]>([]);
+  const [myBets, setMyBets] = useState<Array<{
+    id: string;
+    tab: string;
+    type: string;
+    period: string;
+    date: string;
+    size: string;
+    value: string | number;
+    amount: number;
+    quantity: number;
+    amountAfterTax: number;
+    tax: number;
+    isWin: boolean;
+    status: string;
+    user_id?: string;
+    winAmount?: number;
+    resultNumber?: number;
+    resultColor?: string;
+    resultSize?: string;
+  }>>([]);
   const [expandedBetId, setExpandedBetId] = useState<string | null>(null);
   const [resultPopup, setResultPopup] = useState<any | null>(null);
   // Admin-injected target result from DB (null = auto)
@@ -142,7 +161,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
     const { data: { session } } = await supabase.auth.getSession();
     const userId = session?.user?.id;
     if (!userId) return;
-    const { data } = await supabase.rpc("get_user_rtp_phase", { p_user_id: userId });
+    const { data } = await (supabase.rpc as any)("get_user_rtp_phase", { p_user_id: userId });
     if (data) rtpPhaseRef.current = data;
   }, []);
 
@@ -206,18 +225,17 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
       let effectiveResult = { ...latestResult };
       if (forced === "BIG" && latestResult.size !== "Big") {
         const bigNum = [6, 7, 8, 9][latestResult.number % 4];
-        effectiveResult = { number: bigNum, size: "Big",
-          color: bigNum % 2 === 0 ? "red" : "green", period: latestResult.period };
+        effectiveResult = { ...latestResult, number: bigNum, size: "Big",
+          color: bigNum % 2 === 0 ? "red" : "green" };
       } else if (forced === "SMALL" && latestResult.size !== "Small") {
         const smallNum = [1, 2, 3, 4][latestResult.number % 4];
-        effectiveResult = { number: smallNum, size: "Small",
-          color: smallNum % 2 === 0 ? "red" : "green", period: latestResult.period };
+        effectiveResult = { ...latestResult, number: smallNum, size: "Small",
+          color: smallNum % 2 === 0 ? "red" : "green" };
       } else if (forced?.startsWith("NUM:")) {
         const exactNum = parseInt(forced.slice(4), 10);
         if (!isNaN(exactNum) && exactNum >= 0 && exactNum <= 9) {
-          effectiveResult = { number: exactNum, size: exactNum >= 5 ? "Big" : "Small",
-            color: exactNum === 0 || exactNum === 5 ? "violet" : exactNum % 2 === 0 ? "red" : "green",
-            period: latestResult.period };
+          effectiveResult = { ...latestResult, number: exactNum, size: exactNum >= 5 ? "Big" : "Small",
+            color: exactNum === 0 || exactNum === 5 ? "violet" : exactNum % 2 === 0 ? "red" : "green" };
         }
       }
       if (forced) targetResultRef.current = null;
@@ -271,7 +289,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
         });
 
         if (latestResolvedBet) {
-          setResultPopup(latestResolvedBet);
+          setResultPopup(latestResolvedBet as any);
           play(latestResolvedBet.isWin ? "win" : "lose");
           void refreshHistory();
         }
@@ -280,7 +298,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
           setThirdPartyWalletBalance(thirdPartyWalletBalance + totalWinAmount);
         }
 
-        return hasUpdates ? newBets : prev;
+        return (hasUpdates ? newBets : prev) as any;
       });
   }, [history, period, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance, fetchRtpPhase, applyRtpPhase]);
 
@@ -323,7 +341,21 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
 
   const handlePlaceBet = () => {
     const total = betAmount * betQuantity * betMultiplier;
-    if (thirdPartyWalletBalance < total) return;
+    
+    if (!uid) {
+      alert("Please login to place bet");
+      return;
+    }
+    
+    if (!period) {
+      alert("Invalid game period");
+      return;
+    }
+    
+    if (thirdPartyWalletBalance < total) {
+      alert("Insufficient balance");
+      return;
+    }
 
     play("cash");
     setThirdPartyWalletBalance(thirdPartyWalletBalance - total);
@@ -335,7 +367,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
       type: selectedBet.type,
       period,
       date: new Date().toLocaleString(),
-      size: selectedBet.type === "size" ? selectedBet.value : "-",
+      size: selectedBet.type === "size" ? String(selectedBet.value) : "-",
       value: selectedBet.value,
       amount: total,
       quantity: betQuantity,
@@ -343,12 +375,14 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
       tax: total * 0.02,
       isWin: false,
       status: "pending",
-    };
+      user_id: uid,
+    } as const;
 
     setMyBets((prev) => [betRecord, ...prev]);
 
     // Persist to betting_history table (fire-and-forget)
-    supabase.from("betting_history").insert({
+    (supabase as any).from("betting_history").insert({
+      user_id:  uid,
       period,
       game_type: "wingo",
       mode:      getMode(activeTab),
@@ -356,9 +390,16 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
       bet_value: String(selectedBet.value),
       amount:    total,
       round_id:  roundIdRef.current ?? undefined,
-    }).then(({ error }) => {
-      if (error) console.warn("betting_history insert:", error.message);
-      else void fetchRtpPhase(); // refresh RTP phase after each bet
+      status:    "pending",
+      created_at: new Date().toISOString(),
+    }).then(({ error }: { error: any }) => {
+      if (error) {
+        console.warn("betting_history insert:", error.message);
+        // Refund on error
+        setThirdPartyWalletBalance(thirdPartyWalletBalance + total);
+      } else {
+        void fetchRtpPhase(); // refresh RTP phase after each bet
+      }
     });
 
     setShowBetModal(false);
@@ -464,13 +505,21 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
                         : "bg-[#ff4757] hover:bg-[#ff6b81] text-white"
                     }`}
                     disabled={hasWager}
-                    onClick={() => !hasWager && (window.location.hash = "#/withdraw")}
+                    onClick={() => {
+                      if (!hasWager) {
+                        if (onWithdrawClick) onWithdrawClick();
+                        else window.location.hash = "#/withdraw";
+                      }
+                    }}
                   >
                     Withdraw
                   </button>
                   <button
                     className="flex-1 bg-[#2ed573] hover:bg-[#7bed9f] text-white font-bold py-3 rounded-full transition-colors shadow-md text-sm"
-                    onClick={() => (window.location.hash = "#/deposit")}
+                    onClick={() => {
+                      if (onDepositClick) onDepositClick();
+                      else window.location.hash = "#/deposit";
+                    }}
                   >
                     Deposit
                   </button>
@@ -983,7 +1032,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
                               {bet.status === "pending"
                                 ? bet.amount.toFixed(2)
                                 : bet.isWin
-                                  ? bet.winAmount.toFixed(2)
+                                  ? (bet.winAmount || 0).toFixed(2)
                                   : bet.amount.toFixed(2)}
                             </span>
                           </div>
@@ -1059,10 +1108,10 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
                                               : "text-[#9c27b0]"
                                         }
                                       >
-                                        {bet.resultColor
+                                      {(bet.resultColor || "unknown")
                                           .charAt(0)
                                           .toUpperCase() +
-                                          bet.resultColor.slice(1)}
+                                          (bet.resultColor || "unknown").slice(1)}
                                       </span>
                                       <span
                                         className={
@@ -1118,7 +1167,7 @@ export default function WinGoView({ onBack }: { onBack: () => void }) {
                                     ? "Rs0.00"
                                     : bet.isWin
                                       ? "+ Rs" +
-                                        (bet.winAmount - bet.amount).toFixed(2)
+                                        ((bet.winAmount || 0) - bet.amount).toFixed(2)
                                       : "- Rs" + bet.amount.toFixed(2)}
                                 </span>
                               </div>

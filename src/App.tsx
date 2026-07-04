@@ -41,6 +41,10 @@ import VIPView from './components/VIPView';
 import NoticeView from './components/NoticeView';
 import WinGoView from './components/WinGoView';
 
+// New Pages
+import RebateRatioPage from './app/rebate-ratio/page';
+import AgentSupportPage from './app/agent-support/page';
+
 // Admin Views
 import AdminLogin from './admin/pages/AdminLogin';
 import { AdminDashboard as AdminPanel } from './admin/AdminDashboard';
@@ -329,6 +333,24 @@ const App: React.FC = () => {
               }
             />
 
+            <Route
+              path="/rebate-ratio"
+              element={
+                <ProtectedRoute>
+                  <RebateRatioPage />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/agent-support"
+              element={
+                <ProtectedRoute>
+                  <AgentSupportPage />
+                </ProtectedRoute>
+              }
+            />
+
             {/* ===== HOME ROUTE ===== */}
             <Route
               path="/"
@@ -349,7 +371,31 @@ const App: React.FC = () => {
                           <HomeContent onWinGoClick={() => setCurrentView('wingo')} />
                         </>
                       ) : currentView === 'wingo' ? (
-                        <WinGoView onBack={() => setCurrentView('home')} />
+                        <WinGoView 
+                          onBack={() => setCurrentView('home')} 
+                          onWithdrawClick={() => {
+                            setPreviousView('wingo');
+                            setCurrentView('withdraw');
+                          }}
+                          onDepositClick={() => {
+                            setPreviousView('wingo');
+                            setCurrentView('deposit');
+                          }}
+                        />
+                      ) : currentView === 'deposit' ? (
+                        <DepositView
+                          onBack={() => setCurrentView(previousView)}
+                          onTransactionClick={() => setCurrentView('deposit-history')}
+                        />
+                      ) : currentView === 'deposit-history' ? (
+                        <DepositHistoryView onBack={() => setCurrentView('deposit')} />
+                      ) : currentView === 'withdraw' ? (
+                        <WithdrawView
+                          onBack={() => setCurrentView(previousView)}
+                          onTransactionClick={() => setCurrentView('withdraw-history')}
+                        />
+                      ) : currentView === 'withdraw-history' ? (
+                        <WithdrawHistoryView onBack={() => setCurrentView('withdraw')} />
                       ) : currentView === 'notice' ? (
                         <NoticeView onBack={() => setCurrentView(previousView)} />
                       ) : (

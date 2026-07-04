@@ -1,122 +1,158 @@
-import { Request, Response } from 'express';
-import * as crypto from 'crypto';
-import { supabase } from '../database/db';
+import { Router } from 'express';
+import crypto from 'crypto';
+import { supabaseAdmin } from '../database/db';
 
-// Webhook secret for signature verification (set in environment)
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || process.env.PKPAY_WEBHOOK_SECRET || '';
+const router = Router();
 
-function verifySignature(payload: string, signature: string): boolean {
+// Webhook secret for signature verification
+const WEBHOOK_SECRET = process.env.Webhook_secret || process.env.Payout_API_secret || "";
+
+// PKPay HMAC-SHA256 signature verification
+// Sort keys alphabetically, exclude 'sign', join as key=value&...
+function verifySignature(body: Record<string, any>): boolean {
+  // Skip verification if no secret configured (development mode)
   if (!WEBHOOK_SECRET) {
-    console.warn('Webhook secret not configured, skipping signature verification');
-    return true; // Skip verification if not configured
+    console.warn("[webhook/payout] No WEBHOOK_SECRET configured — skipping signature verification");
+    return true;
   }
 
+  const { sign, ...rest } = body;
+  
+  // Build payload string from sorted keys
+  const payload = Object.keys(rest)
+    .sort()
+    .filter((k) => rest[k] !== undefined && rest[k] !== null && rest[k] !== "")
+    .map((k) => `${k}=${rest[k]}`)
+    .join("&");
+
+  const expected = crypto
+    .createHmac("sha256", WEBHOOK_SECRET)
+    .update(payload)
+    .digest("hex");
+
   try {
-    const expectedSignature = crypto
-      .createHmac('sha256', WEBHOOK_SECRET)
-      .update(payload)
-      .digest('hex');
-
-    // Use timing-safe comparison to prevent timing attacks
-    const receivedSignature = (signature || '').toLowerCase();
-    const expected = expectedSignature.toLowerCase();
-
-    if (receivedSignature.length !== expected.length) {
-      return false;
+    const isValid = crypto.timingSafeEqual(
+      Buffer.from(expected.toLowerCase()),
+      Buffer.from((sign || "").toLowerCase())
+    );
+    
+    if (!isValid) {
+      console.warn("[webhook/payout] Invalid signature — rejected");
     }
-
-    return crypto.timingSafeEqual(Buffer.from(receivedSignature), Buffer.from(expected));
-  } catch (err) {
-    console.error('Signature verification error:', err);
+    
+    return isValid;
+  } catch (error) {
+    console.error("[webhook/payout] Signature verification error:", error);
     return false;
   }
 }
 
-export default async function handler(req: Request, res: Response) {
-  // Only accept POST requests
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+router.post('/payout', async (req, res) => {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const payload = req.body;
-    const rawBody = JSON.stringify(payload);
-    const signature = req.headers['x-pkpay-signature'] as string || req.headers['x-signature'] as string || '';
+    // ═══════════════════════════════════════════════════════════════
+    // EMERGENCY CRITICAL: RAW BODY CAPTURE
+    // Read the raw text from the request body BEFORE any processing.
+    // This ensures we capture the absolute raw transmission string
+    // even if JSON parsing fails or the body is malformed.
+    // ═══════════════════════════════════════════════════════════════
+    const rawBodyText = typeof req.body === 'object' 
+      ? JSON.stringify(req.body) 
+      : String(req.body || '');
 
-    console.log('Incoming PKPay Webhook Payload:', payload);
+    console.log("═══════════════════════════════════════════════════════════════════");
+    console.log("👉 EMERGENCY CRITICAL WEBHOOK TRIGGER RECEIVED FROM GATEWAY");
+    console.log("👉 RAW BODY TEXT:", rawBodyText);
+    console.log("👉 RAW BODY LENGTH:", rawBodyText.length, "chars");
+    console.log("👉 CONTENT-TYPE:", req.headers['content-type'] || 'none');
+    console.log("👉 ALL HEADERS:", JSON.stringify(req.headers));
+    console.log("═══════════════════════════════════════════════════════════════════");
 
-    // 0. Signature Verification
-    if (!verifySignature(rawBody, signature)) {
-      console.error('Webhook signature verification failed');
-      return res.status(401).json({ error: 'Invalid signature' });
+    // If body is empty, log it and return early — don't crash
+    if (!rawBodyText || rawBodyText === '{}' || rawBodyText === '""') {
+      console.warn("[webhook/payout] ⚠️ Empty transmission body parameters — logged raw above");
+      return res.status(200).json({ received: true, note: "Empty transmission body parameters." });
     }
 
-    // 1. Basic Data Validation
-    if (!payload || !payload.order_id || !payload.amount || !payload.user_id) {
-      return res.status(400).json({ error: 'Missing required payload fields' });
+    // Parse the raw body text into a structured payload
+    let payload: Record<string, any>;
+    try {
+      payload = JSON.parse(rawBodyText);
+    } catch (parseError: any) {
+      console.error("[webhook/payout] ❌ JSON PARSE FAILED on raw body:", parseError.message);
+      console.error("[webhook/payout] ❌ Raw text that failed to parse:", rawBodyText);
+      return res.status(200).json({ 
+        received: true, 
+        note: "Body received but JSON parse failed — raw text logged on server" 
+      });
     }
 
-    // 2. Check Success Status from Gateway
-    const successStatuses = ['success', 'completed', '1', 'paid', 'approved'];
-    if (successStatuses.includes((payload.status || '').toLowerCase())) {
-      const userId = payload.user_id;
-      const amount = parseFloat(payload.amount);
-      const gatewayRef = payload.sys_order_id || payload.order_id;
+    // Log the parsed payload for debugging
+    console.log("[webhook/payout] ✅ Successfully parsed JSON payload:", JSON.stringify(payload, null, 2));
 
-      if (isNaN(amount) || amount <= 0) {
-        return res.status(400).json({ error: 'Invalid amount' });
-      }
-
-      // 3. Compute wagering multiplier (default 1x)
-      const wageringMultiplier = parseFloat(process.env.WAGERING_MULTIPLIER || '1');
-      const wageringAmount = amount * wageringMultiplier;
-
-      // 4. Calculate bonus (2% if enabled)
-      const bonusEnabled = (process.env.DEPOSIT_BONUS_ENABLED || 'true') === 'true';
-      const bonus = bonusEnabled ? amount * 0.02 : 0;
-      const totalCredit = amount + bonus;
-
-      // 5. Use RPC to atomically increment user's main_balance and wagering_required in public.users
-      try {
-        const { data: rpcResult, error: rpcErr } = await supabase.rpc('increment_user_deposit', {
-          p_user_id: userId,
-          p_amount: amount,
-          p_bonus: bonus,
-          p_wagering: wageringAmount
-        });
-
-        if (rpcErr) {
-          console.error('RPC increment_user_deposit failed:', rpcErr);
-          return res.status(500).json({ error: 'Failed to update balances' });
-        }
-      } catch (e) {
-        console.error('RPC call error:', e);
-        return res.status(500).json({ error: 'Failed to update balances (rpc error)' });
-      }
-
-      // 6. Log successful transaction into transactions table
-      const { error: txError } = await supabase
-        .from('transactions')
-        .insert([{
-          user_id: userId,
-          type: 'deposit',
-          amount: amount,
-          bonus: bonus,
-          status: 'completed',
-          gateway_ref: gatewayRef,
-          created_at: new Date().toISOString()
-        }]);
-
-      if (txError) {
-        console.error('Warning: Transaction logged but failed to insert transactions row:', txError);
-      }
-
-      return res.status(200).send('SUCCESS');
+    // Verify webhook signature for security
+    if (!verifySignature(payload)) {
+      console.warn("[webhook/payout] ⛔ SIGNATURE MISMATCH — payload rejected but logged above for debugging");
+      return res.status(401).json({ error: "Invalid signature" });
     }
 
-    return res.status(200).send('ORDER_NOT_SUCCESSFUL');
+    const { out_trade_no, status } = payload;
+
+    if (!out_trade_no) {
+      console.warn("[webhook/payout] ⚠️ Missing out_trade_no in payload — full body logged above");
+      return res.status(200).json({ received: true, note: "Missing out_trade_no — payload logged" });
+    }
+
+    // out_trade_no is the withdrawal_history.id set when creating the payout request
+    const withdrawalId = String(out_trade_no);
+    const isSuccess = ["success", "SUCCESS", "1", "SUCCESSFUL"].includes(String(status).toUpperCase());
+
+    console.log(`[webhook/payout] ${withdrawalId} → status=${status} → ${isSuccess ? "SUCCESS" : "FAILED"}`);
+
+    if (isSuccess) {
+      // PKPay success → mark withdrawal as completed
+      const { data, error } = await supabaseAdmin.rpc("complete_withdrawal", {
+        p_withdrawal_id: withdrawalId,
+        p_gateway_ref:   `pkpay:${out_trade_no}`,
+      });
+
+      if (error) {
+        console.error("[webhook/payout] complete_withdrawal error:", error);
+        return res.status(500).json({ error: error.message });
+      }
+
+      // Return 200 even if already_completed so PKPay stops retrying
+      console.log(`[webhook/payout] ✓ Completed: ${withdrawalId}`, data);
+      return res.status(200).json({ code: 0, msg: "success" });
+
+    } else {
+      // PKPay failed → mark withdrawal as failed and refund balance
+      const { data, error } = await supabaseAdmin.rpc("fail_withdrawal", {
+        p_withdrawal_id: withdrawalId,
+        p_reason:        `PKPay payout failed (status=${status})`,
+      });
+
+      if (error) {
+        console.error("[webhook/payout] fail_withdrawal error:", error);
+        return res.status(500).json({ error: error.message });
+      }
+
+      console.log(`[webhook/payout] ✗ Failed + refunded: ${withdrawalId}`, data);
+      return res.status(200).json({ code: 0, msg: "noted_failed" });
+    }
+
   } catch (error: any) {
-    console.error('Webhook Internal Server Error:', error.message);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    console.error("[webhook/payout] ❌ Webhook Execution Pipeline Crash Log:", error.message);
+    console.error("[webhook/payout] ❌ Full error:", error.stack || error);
+    return res.status(200).json({ 
+      success: false, 
+      error: error.message || "Internal server error",
+      received: true  // Always return 200 so PKPay doesn't keep retrying
+    });
   }
-}
+});
+
+export default router;

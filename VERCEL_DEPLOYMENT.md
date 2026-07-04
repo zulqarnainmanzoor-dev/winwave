@@ -116,10 +116,10 @@ npm install -g vercel
 vercel dev  # Runs on localhost:3000
 
 # Test API endpoints
-curl http://localhost:4000/api/status
+curl https://winwave-official.vercel.app/api/status
 
 # Test registration
-curl -X POST http://localhost:4000/api/register \
+curl -X POST https://winwave-official.vercel.app/api/register \
   -H "Content-Type: application/json" \
   -d '{"phone":"3001234567","password":"Test1234","confirmPassword":"Test1234","invitationCode":""}'
 ```

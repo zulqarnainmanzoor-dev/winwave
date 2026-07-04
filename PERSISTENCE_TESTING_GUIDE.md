@@ -5,7 +5,7 @@
 ### 1. **Registration & Initial Data** (5 minutes)
 ```bash
 # Open browser console (F12)
-# Go to http://localhost:3000
+# Go to https://winwave-official.vercel.app
 
 # 1. Clear all storage first
 localStorage.clear(); sessionStorage.clear();
@@ -68,7 +68,7 @@ JSON.parse(localStorage.getItem('winwave_user_session')).boundAccounts
 # 1. Register user with phone: 3001234567
 # 2. Verify isLoggedIn = true in session
 # 3. Close browser completely (all tabs)
-# 4. Reopen browser and go to localhost:3000
+# 4. Reopen browser and go to https://winwave-official.vercel.app
 # 5. Should be logged in automatically as 3001234567
 # 6. Balance should be same as before
 # 7. Payment method should be same as before
@@ -96,7 +96,7 @@ JSON.parse(localStorage.getItem('winwave_user_session')).isLoggedIn // Should be
 ```bash
 # 1. Open tab 1, register as 3001234567
 # 2. Open new tab 2 (Ctrl+T)
-# 3. Go to localhost:3000
+# 3. Go to https://winwave-official.vercel.app
 # 4. Should automatically log in as 3001234567
 # 5. Should see same balance/payment method/PIN
 # (Both tabs share same localStorage)

@@ -54,7 +54,7 @@ router.get('/', (req, res) => {
   res.json({
     authorized: true,
     message: 'Admin dashboard access granted',
-    dashboardUrl: 'http://localhost:3000/admin'
+  dashboardUrl: 'https://winwave-official.vercel.app/admin'
   })
 })
 
@@ -73,7 +73,7 @@ export default router
 
 ### Step 3: Access Admin Dashboard
 
-- **Local Dev**: http://localhost:3000
+- **Local Dev**: https://winwave-official.vercel.app
 - **Check Path**: Navigate to `/admin` route
 - **Or Direct URL**: Add query param `?admin=true`
 

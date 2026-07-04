@@ -10,8 +10,8 @@
 - [ ] Test payment method persistence
 - [ ] Test withdrawal PIN persistence
 - [ ] Test balance persistence
-- [ ] Visit http://localhost:3000 - Frontend loads
-- [ ] Visit http://localhost:4000/api/status - Backend responds with 200
+- [ ] Visit https://winwave-official.vercel.app - Frontend loads
+- [ ] Visit https://winwave-official.vercel.app/api/status - Backend responds with 200
 - [ ] Check that NO ERRORS appear in build output
 
 ---

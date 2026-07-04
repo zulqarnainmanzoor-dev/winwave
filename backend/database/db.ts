@@ -16,7 +16,9 @@ export interface Database {
           total_bets: number | null;
           vip_level: number | null;
           invite_code: string | null;
+          inviter_code: string | null;
           referred_by: string | null;
+          registered_ip: string | null;
           withdrawal_pin: string | null;
           wallet_details: Json | null;
           bank_details: Json | null;
@@ -34,7 +36,9 @@ export interface Database {
           total_bets?: number | null;
           vip_level?: number | null;
           invite_code?: string | null;
+          inviter_code?: string | null;
           referred_by?: string | null;
+          registered_ip?: string | null;
           withdrawal_pin?: string | null;
           wallet_details?: Json | null;
           bank_details?: Json | null;
@@ -52,7 +56,9 @@ export interface Database {
           total_bets?: number | null;
           vip_level?: number | null;
           invite_code?: string | null;
+          inviter_code?: string | null;
           referred_by?: string | null;
+          registered_ip?: string | null;
           withdrawal_pin?: string | null;
           wallet_details?: Json | null;
           bank_details?: Json | null;
@@ -273,6 +279,91 @@ export interface Database {
           ifsc_code?: string | null;
           upi_id?: string | null;
           created_at?: string;
+        };
+      };
+      withdrawal_history: {
+        Row: {
+          id: string;
+          user_id: string;
+          amount: number;
+          method: string;
+          account_number: string;
+          account_name: string | null;
+          status: string;
+          gateway_ref: string | null;
+          gateway_error_logs: string | null;
+          reason: string | null;
+          remarks: string | null;
+          created_at: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          amount: number;
+          method: string;
+          account_number: string;
+          account_name?: string | null;
+          status?: string;
+          gateway_ref?: string | null;
+          gateway_error_logs?: string | null;
+          reason?: string | null;
+          remarks?: string | null;
+          created_at?: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          amount?: number;
+          method?: string;
+          account_number?: string;
+          account_name?: string | null;
+          status?: string;
+          gateway_ref?: string | null;
+          gateway_error_logs?: string | null;
+          reason?: string | null;
+          remarks?: string | null;
+          created_at?: string;
+          updated_at?: string | null;
+        };
+      };
+      deposit_history: {
+        Row: {
+          id: string;
+          user_id: string;
+          amount: number;
+          method: string;
+          order_id: string | null;
+          status: string;
+          gateway_ref: string | null;
+          remarks: string | null;
+          created_at: string;
+          updated_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          amount: number;
+          method?: string;
+          order_id?: string | null;
+          status?: string;
+          gateway_ref?: string | null;
+          remarks?: string | null;
+          created_at?: string;
+          updated_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          amount?: number;
+          method?: string;
+          order_id?: string | null;
+          status?: string;
+          gateway_ref?: string | null;
+          remarks?: string | null;
+          created_at?: string;
+          updated_at?: string | null;
         };
       };
     };

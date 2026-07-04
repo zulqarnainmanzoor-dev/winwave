@@ -28,7 +28,7 @@ export default function App({ initialAuthState = 'login' }: AppProps) {
   }, [])
 
   // Option 2: Use query parameter
-  // http://localhost:3000/?view=admin&secret=YOUR_ADMIN_SECRET
+  // https://winwave-official.vercel.app/?view=admin&secret=YOUR_ADMIN_SECRET
 
   if (currentView === 'admin') {
     return <AdminDashboard />
@@ -124,7 +124,7 @@ function AdminGuard({ children }: AdminGuardProps) {
 
 /*
 1. DEVELOPMENT:
-   - Access admin dashboard: http://localhost:3000/admin?secret=YOUR_ADMIN_SECRET
+   - Access admin dashboard: https://winwave-official.vercel.app/admin?secret=YOUR_ADMIN_SECRET
    - Or navigate with: setCurrentView('admin')
 
 2. WITH ENVIRONMENT VARIABLES:

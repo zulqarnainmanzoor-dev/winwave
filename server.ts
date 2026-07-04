@@ -64,8 +64,18 @@ async function startServer() {
   }
 
   const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Admin panel available at: http://localhost:${PORT}/api/admin/${adminSecret}`);
+    const isProduction = process.env.NODE_ENV === "production";
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL || `http://localhost:${PORT}`;
+    
+    if (isProduction) {
+      console.log(`✅ Server running in PRODUCTION mode`);
+      console.log(`🌐 Site URL: ${siteUrl}`);
+      console.log(`🔐 Admin panel: ${siteUrl}/api/admin/${adminSecret}`);
+    } else {
+      console.log(`🛠️  Server running in DEVELOPMENT mode`);
+      console.log(`🌐 Local URL: http://localhost:${PORT}`);
+      console.log(`🔐 Admin panel: http://localhost:${PORT}/api/admin/${adminSecret}`);
+    }
   });
 
   server.on('error', (error: NodeJS.ErrnoException) => {
