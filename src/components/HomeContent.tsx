@@ -1,36 +1,36 @@
 import { useState } from "react";
 import { SectionHeader, GameGrid, GameCard } from "./HomeSections";
-import { 
-  Trophy, 
-  Crown, 
-  Phone, 
-  Wrench, 
-  TrendingUp, 
-  Coins, 
-  Award, 
-  Dices, 
-  Rocket, 
-  Gamepad2, 
-  Compass, 
-  Gem, 
-  Fish, 
-  Layers, 
+import {
+  Trophy,
+  Crown,
+  Phone,
+  Wrench,
+  TrendingUp,
+  Coins,
+  Award,
+  Dices,
+  Rocket,
+  Gamepad2,
+  Compass,
+  Gem,
+  Fish,
+  Layers,
   Flame,
   Star,
-  Sparkles
+  Sparkles,
 } from "lucide-react";
+import { useUser } from "../context/UserContext"; // <-- added
 
 // Generate 120 fake leaderboard members to simulate a highly active real-time community
 const generateLeaderboardUsers = () => {
   const prefix = ["Ali", "Ahm", "Hus", "Zah", "Sub", "She", "Saj", "Bil", "Asi", "Kha", "Muha", "Usm", "Ham", "Uma", "Far", "Fai", "Ibr", "Yau", "Taq", "Waq", "Naf", "Sal", "Har", "Kam"];
   const middle = ["***", "---", "###", "...", "***"];
   const suffix = ["12", "77", "88", "15", "55", "92", "44", "32", "99", "01", "23", "45", "89", "11", "22", "33", "777", "999", "101", "505", "202", "303", "404", "808"];
-  
+
   const users = [];
   let currentEarnings = 42100;
   for (let i = 4; i <= 125; i++) {
     const name = `${prefix[i % prefix.length]}${middle[i % middle.length]}${suffix[(i * 7) % suffix.length]}`;
-    // Gradual decay in earnings down to Rs 150 minimum
     const decay = Math.floor(Math.random() * 250) + 120;
     currentEarnings = Math.max(150, currentEarnings - decay);
     users.push({
@@ -45,11 +45,10 @@ const generateLeaderboardUsers = () => {
 const LEADERBOARD_MEMBERS = generateLeaderboardUsers();
 
 // Game visibility array - all games are visible by default
-// Use visibleGames.includes(game.name) to hide under-maintenance games
 const VISIBLE_GAMES = [
   'Win Go',
   'Aviator',
-  'Cricket', 
+  'Cricket',
   'Mines Pro',
   'Mines',
   'Spride Aviator',
@@ -62,16 +61,37 @@ export default function HomeContent({
 }) {
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [maintenanceGame, setMaintenanceGame] = useState('');
+  
+  // 1. Context ko safe treat karne ke liye dynamic cast kiya
+  const ctx = useUser() as any; 
+  const activeUser = ctx?.user || ctx?.profile;
 
-  // Check if a game is in the visible list
+  // 2. Recharge popup state control register
+  const [showRechargeModal, setShowRechargeModal] = useState(false);
+
   const isGameVisible = (gameName: string) => {
     return VISIBLE_GAMES.includes(gameName);
   };
 
-  // Handle click on visible games that aren't WinGo
   const handleVisibleGameClick = (gameName: string) => {
     setMaintenanceGame(gameName);
     setShowMaintenance(true);
+  };
+
+  // ── NEW: WinGo access check ──────────────────────────────────
+  const handleWinGoPlay = () => {
+    if (!activeUser) {
+      alert("Please log in to play WinGo.");
+      return;
+    }
+    
+    // Agar user ne recharge nahi kiya aur main balance bhi 0 hai
+    if (!activeUser.has_recharged && Number(activeUser.main_balance) <= 0) {
+      setShowRechargeModal(true);
+      return;
+    }
+    
+    onWinGoClick?.();
   };
 
   return (
@@ -87,7 +107,7 @@ export default function HomeContent({
           {isGameVisible('Win Go') && (
             <div
               className="rounded-3xl overflow-hidden relative cursor-pointer group aspect-[1.4/1.8]"
-              onClick={onWinGoClick}
+              onClick={handleWinGoPlay} // <-- changed
             >
               <div className="absolute inset-0 bg-gradient-to-br from-[#D94C4C] to-[#8C2323]" />
               <img
@@ -211,7 +231,7 @@ export default function HomeContent({
             title="WIN GO"
             img="assets/Games Sections/Recommended Games/WinGo.webp"
             bgColor="bg-[#2B2735]"
-            onClick={onWinGoClick}
+            onClick={handleWinGoPlay} // <-- changed
           />
           {isGameVisible('Aviator') && (
             <GameCard
@@ -428,7 +448,7 @@ export default function HomeContent({
         <div className="border-t border-white/5 pt-4">
           <div className="max-h-[280px] overflow-y-auto pr-1 space-y-2 no-scrollbar scroll-smooth">
             {LEADERBOARD_MEMBERS.map((member) => (
-              <div 
+              <div
                 key={member.rank}
                 className="flex items-center justify-between bg-[#151518]/60 px-4 py-2.5 rounded-2xl border border-white/5 hover:border-[#ffa502]/10 transition-colors"
               >
@@ -506,6 +526,39 @@ export default function HomeContent({
                 className="w-full bg-gradient-to-r from-[#ffa502] to-[#ffbe59] text-black font-black py-2.5 rounded-full hover:brightness-110 transition-all cursor-pointer uppercase tracking-wider text-xs shadow-lg shadow-amber-500/10"
               >
                 Got it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ── CLEAN BLACK ROUNDED OVERLAY POPUP ── */}
+      {showRechargeModal && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-xs bg-zinc-900 border border-zinc-800 rounded-2xl p-6 text-center shadow-2xl">
+            {/* Heading */}
+            <h3 className="text-lg font-bold text-white tracking-wide mb-1">
+              Recharge Not Received
+            </h3>
+            <p className="text-xs text-zinc-400 mb-6">
+              Please complete your first deposit to play WinGo.
+            </p>
+
+            {/* Action Buttons */}
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  setShowRechargeModal(false);
+                  window.location.hash = '/deposit'; 
+                }}
+                className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-xl text-sm transition"
+              >
+                Recharge Now
+              </button>
+              <button
+                onClick={() => setShowRechargeModal(false)}
+                className="w-full py-2 text-zinc-400 hover:text-white text-xs font-medium transition"
+              >
+                Close
               </button>
             </div>
           </div>

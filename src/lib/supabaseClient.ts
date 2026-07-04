@@ -201,12 +201,17 @@ declare global {
   var __supabase_singleton__: SupabaseClient<Database> | undefined;
 }
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// Prefer VITE_* (existing app expectation), but fall back to NEXT_PUBLIC_*
+// because your .env currently contains NEXT_PUBLIC_SUPABASE_*.
+const supabaseUrl =
+  import.meta.env.VITE_SUPABASE_URL ?? import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey =
+  import.meta.env.VITE_SUPABASE_ANON_KEY ?? import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env');
+  throw new Error('Missing Supabase URL/Anon key. Set VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY (or NEXT_PUBLIC_SUPABASE_URL/NEXT_PUBLIC_SUPABASE_ANON_KEY) in .env');
 }
+
 
 if (!globalThis.__supabase_singleton__) {
   globalThis.__supabase_singleton__ = createClient<Database>(supabaseUrl, supabaseAnonKey, {

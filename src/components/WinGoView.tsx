@@ -169,6 +169,7 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
 
   // Apply RTP phase to a result: controlled_loss flips result against user's bet
   const applyRtpPhase = useCallback((result: typeof history[0], bets: any[]) => {
+
     const phase = rtpPhaseRef.current;
     const pendingBets = bets.filter(b => b.status === "pending" && b.period === result.period);
     if (!pendingBets.length || phase === "normal") return result;
@@ -213,94 +214,170 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
     return result;
   }, []);
 
+  // Period finish handler: resolve bets locally, then hard-sync the authoritative betting_history status/win.
   useEffect(() => {
     if (history.length === 0) return;
     const latestResult = history[0];
     if (!latestResult.period || latestResult.period === lastResolvedPeriodRef.current) return;
+    // We resolve *previous* period once server history updates; avoid resolving the currently ticking period.
     if (latestResult.period === period) return;
-    lastResolvedPeriodRef.current = latestResult.period;
 
-      // Apply admin-forced target_result at resolution time
-      const forced = targetResultRef.current; // 'BIG' | 'SMALL' | 'NUM:X' | null
-      let effectiveResult = { ...latestResult };
-      if (forced === "BIG" && latestResult.size !== "Big") {
-        const bigNum = [6, 7, 8, 9][latestResult.number % 4];
-        effectiveResult = { ...latestResult, number: bigNum, size: "Big",
-          color: bigNum % 2 === 0 ? "red" : "green" };
-      } else if (forced === "SMALL" && latestResult.size !== "Small") {
-        const smallNum = [1, 2, 3, 4][latestResult.number % 4];
-        effectiveResult = { ...latestResult, number: smallNum, size: "Small",
-          color: smallNum % 2 === 0 ? "red" : "green" };
-      } else if (forced?.startsWith("NUM:")) {
-        const exactNum = parseInt(forced.slice(4), 10);
-        if (!isNaN(exactNum) && exactNum >= 0 && exactNum <= 9) {
-          effectiveResult = { ...latestResult, number: exactNum, size: exactNum >= 5 ? "Big" : "Small",
-            color: exactNum === 0 || exactNum === 5 ? "violet" : exactNum % 2 === 0 ? "red" : "green" };
-        }
+    const finishedPeriodId = latestResult.period;
+    lastResolvedPeriodRef.current = finishedPeriodId;
+
+    // Apply admin-forced target_result at resolution time
+    const forced = targetResultRef.current; // 'BIG' | 'SMALL' | 'NUM:X' | null
+
+    let effectiveResult = { ...latestResult };
+    if (forced === "BIG" && latestResult.size !== "Big") {
+      const bigNum = [6, 7, 8, 9][latestResult.number % 4];
+      effectiveResult = {
+        ...latestResult,
+        number: bigNum,
+        size: "Big",
+        color: bigNum % 2 === 0 ? "red" : "green",
+      };
+    } else if (forced === "SMALL" && latestResult.size !== "Small") {
+      const smallNum = [1, 2, 3, 4][latestResult.number % 4];
+      effectiveResult = {
+        ...latestResult,
+        number: smallNum,
+        size: "Small",
+        color: smallNum % 2 === 0 ? "red" : "green",
+      };
+    } else if (forced?.startsWith("NUM:")) {
+      const exactNum = parseInt(forced.slice(4), 10);
+      if (!isNaN(exactNum) && exactNum >= 0 && exactNum <= 9) {
+        effectiveResult = {
+          ...latestResult,
+          number: exactNum,
+          size: exactNum >= 5 ? "Big" : "Small",
+          color:
+            exactNum === 0 || exactNum === 5
+              ? "violet"
+              : exactNum % 2 === 0
+                ? "red"
+                : "green",
+        };
       }
-      if (forced) targetResultRef.current = null;
+    }
+    if (forced) targetResultRef.current = null;
 
-      setMyBets((prev) => {
-        // Apply RTP phase before resolving (only if no admin override)
-        const rtpResult = forced ? effectiveResult : applyRtpPhase(effectiveResult, prev);
-        let hasUpdates = false;
-        let latestResolvedBet = null;
-        let totalWinAmount = 0;
+    // 1) Local resolve for immediate UI.
+    setMyBets((prev) => {
+      // Apply RTP phase before resolving (only if no admin override)
+      const rtpResult = forced ? effectiveResult : applyRtpPhase(effectiveResult, prev);
+      let hasUpdates = false;
+      let latestResolvedBet: any = null;
+      let totalWinAmount = 0;
 
-        const newBets = prev.map((bet) => {
-          if (bet.status === "pending" && bet.period === rtpResult.period) {
-            hasUpdates = true;
-            let isWin = false;
+      const newBets = prev.map((bet) => {
+        if (bet.status === "pending" && bet.period === rtpResult.period) {
+          hasUpdates = true;
+          let isWin = false;
 
-            if (bet.type === "size" && bet.value === rtpResult.size) isWin = true;
-            if (bet.type === "number" && Number(bet.value) === rtpResult.number) isWin = true;
-            if (bet.type === "color") {
-              if (bet.value === "Green" && (rtpResult.color === "green" || rtpResult.number === 5)) isWin = true;
-              if (bet.value === "Red"   && (rtpResult.color === "red"   || rtpResult.number === 0)) isWin = true;
-              if (bet.value === "Violet" && rtpResult.color === "violet") isWin = true;
-            }
-
-            // For color and size, win is 1.96 * total amount. (Profit is 96%).
-            // For numbers, typical win is 9 * total amount.
-            const winAmount = isWin
-              ? bet.amount * (bet.type === "number" ? 9 : 1.96)
-              : 0;
-            if (isWin) {
-              totalWinAmount += winAmount;
-            }
-
-            const resolvedBet = {
-              ...bet,
-              status: isWin ? "win" : "lose",
-              isWin,
-              winAmount,
-              resultNumber: rtpResult.number,
-              resultColor:  rtpResult.color,
-              resultSize:   rtpResult.size,
-            };
-
-            if (bet.tab === activeTab) {
-              latestResolvedBet = resolvedBet;
-            }
-
-            return resolvedBet;
+          if (bet.type === "size" && bet.value === rtpResult.size) isWin = true;
+          if (bet.type === "number" && Number(bet.value) === rtpResult.number) isWin = true;
+          if (bet.type === "color") {
+            if (bet.value === "Green" && (rtpResult.color === "green" || rtpResult.number === 5)) isWin = true;
+            if (bet.value === "Red" && (rtpResult.color === "red" || rtpResult.number === 0)) isWin = true;
+            if (bet.value === "Violet" && rtpResult.color === "violet") isWin = true;
           }
-          return bet;
-        });
 
-        if (latestResolvedBet) {
-          setResultPopup(latestResolvedBet as any);
-          play(latestResolvedBet.isWin ? "win" : "lose");
-          void refreshHistory();
+          const winAmount = isWin ? bet.amount * (bet.type === "number" ? 9 : 1.96) : 0;
+          if (isWin) totalWinAmount += winAmount;
+
+          const resolvedBet = {
+            ...bet,
+            status: isWin ? "win" : "lose",
+            isWin,
+            winAmount,
+            resultNumber: rtpResult.number,
+            resultColor: rtpResult.color,
+            resultSize: rtpResult.size,
+          };
+
+          if (bet.tab === activeTab) latestResolvedBet = resolvedBet;
+          return resolvedBet;
         }
-
-        if (totalWinAmount > 0) {
-          setThirdPartyWalletBalance(thirdPartyWalletBalance + totalWinAmount);
-        }
-
-        return (hasUpdates ? newBets : prev) as any;
+        return bet;
       });
-  }, [history, period, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance, fetchRtpPhase, applyRtpPhase]);
+
+      if (latestResolvedBet) {
+        setResultPopup(latestResolvedBet);
+        play(latestResolvedBet.isWin ? "win" : "lose");
+        void refreshHistory();
+      }
+
+      if (totalWinAmount > 0) {
+        setThirdPartyWalletBalance(thirdPartyWalletBalance + totalWinAmount);
+      }
+
+      return (hasUpdates ? newBets : prev) as any;
+    });
+
+    // 2) Backend hard-sync: clear pending mismatch and force-sync wallets.
+    (async () => {
+      try {
+        if (!uid || !finishedPeriodId) return;
+
+        // Pull authoritative betting_history rows for this user+finished period.
+        // IMPORTANT: we use this to clear any pending mismatch.
+        const { data: updatedRows, error: fetchErr } = await supabase
+          .from("betting_history")
+          .select("status, win_amount, period_id, amount")
+          .eq("user_id", uid)
+          .eq("period_id", finishedPeriodId);
+
+        if (fetchErr) {
+          console.warn("Period sync fetch failed:", fetchErr);
+        }
+
+        const rows = (updatedRows as any[]) || [];
+        if (rows.length) {
+          setMyBets((prev) =>
+            prev.map((b) => {
+              if (b.period !== finishedPeriodId) return b;
+
+              const row = rows.find((r) => Number(r.amount ?? 0) === Number(b.amount ?? 0));
+              if (!row) return b;
+
+              const status = row.status;
+              if (status === "pending") return b; // keep as-is
+
+              const isWin = status === "win";
+              return {
+                ...b,
+                status: isWin ? "win" : "lose",
+                isWin,
+                winAmount: Number(row.win_amount ?? b.winAmount ?? 0),
+              };
+            })
+          );
+        }
+
+        // Force refresh balances from DB (prevents double calc drift)
+        const { data: profile, error: profileErr } = await supabase
+          .from("users")
+          .select("main_balance, game_balance")
+          .eq("id", uid)
+          .maybeSingle();
+
+        if (!profileErr && profile) {
+          if (typeof (profile as any).game_balance !== "undefined") {
+            setThirdPartyWalletBalance(Number((profile as any).game_balance));
+          }
+          // main_balance is handled by UserContext realtime; but if it exists, refresh is safe.
+          // (UserContext doesn't expose setMainBalance here, so we rely on realtime profile-changes.)
+        }
+      } catch (err) {
+        console.error("Period calculation fetch failed:", err);
+      }
+    })();
+  }, [history, period, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance, applyRtpPhase, uid, play]);
+
+
+
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);

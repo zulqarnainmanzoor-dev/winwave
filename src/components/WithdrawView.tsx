@@ -573,7 +573,7 @@ export default function WithdrawView({
       </div>
 
       {/* Action Button — sits above BottomNav (68px) */}
-      <div className="fixed inset-x-0 bottom-[68px] px-4 pb-3 pt-2 bg-gradient-to-t from-[#f5f8ff] via-[#f5f8ff]/95 to-transparent z-30 pointer-events-none">
+      <div className="fixed inset-x-0 bottom-[68px] px-4 pb-3 pt-2 bg-[#0A0A0B] z-30 pointer-events-none">
         <div className="mx-auto w-full max-w-[450px] pointer-events-auto">
           <button
             onClick={handleWithdrawClick}

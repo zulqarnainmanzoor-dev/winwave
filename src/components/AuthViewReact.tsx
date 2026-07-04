@@ -55,19 +55,25 @@ export default function AuthView({
 
   const getReferralCodeFromLocation = () => {
     if (typeof window === "undefined") return "";
+
+    // Prefer query params (supports both Vercel + localhost routing)
     const fromSearch = searchParams.get("ref") || searchParams.get("invite");
     if (fromSearch) return fromSearch.trim().toUpperCase();
 
+    // Support hash-based router (e.g. /#/register?invite=XXXX)
     const rawHash = window.location.hash || "";
-    const hashQuery = rawHash.includes("?")
-      ? rawHash.split("?")[1] || ""
-      : rawHash.replace(/^#\/?/, "");
-    const hashParams = new URLSearchParams(hashQuery);
-    const fromHash = hashParams.get("ref") || hashParams.get("invite");
-    if (fromHash) return fromHash.trim().toUpperCase();
 
+    // Case A: hash contains ?...
+    if (rawHash.includes("?")) {
+      const hashQuery = rawHash.split("?")[1] || "";
+      const hashParams = new URLSearchParams(hashQuery);
+      const fromHash = hashParams.get("ref") || hashParams.get("invite");
+      if (fromHash) return fromHash.trim().toUpperCase();
+    }
+
+    // Case B: fallback regex
     const hashRefMatch = rawHash.match(/[?&](?:ref|invite)=([^&]+)/i);
-    return hashRefMatch?.[1] ? decodeURIComponent(hashRefMatch[1]) : "";
+    return hashRefMatch?.[1] ? decodeURIComponent(hashRefMatch[1]).toUpperCase() : "";
   };
 
   useEffect(() => {

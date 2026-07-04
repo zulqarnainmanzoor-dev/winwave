@@ -533,7 +533,11 @@ export default function PromotionView() {
           ) : (
             /* SLIDE 2: Commission summary & quick values */
             <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl p-5 shadow-[0_12px_24px_rgba(0,0,0,0.5)] animate-fade-in space-y-5">
-              <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-3 text-center">
+                <p className="text-xs font-black text-red-400 uppercase tracking-wider">Stats are coming soon</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-center opacity-30 pointer-events-none">
                 <div className="bg-[#2C2C2E] border border-white/5 rounded-2xl py-3 px-1">
                   <span className="text-[#ffa502] text-sm font-black block">
                     <AnimatedCounter value={0} prefix="Rs " />
@@ -548,7 +552,7 @@ export default function PromotionView() {
                 </div>
               </div>
 
-                <div className="border-t border-white/5 pt-4 grid grid-cols-2 text-center divide-x divide-white/5">
+              <div className="border-t border-white/5 pt-4 grid grid-cols-2 text-center divide-x divide-white/5 opacity-30 pointer-events-none">
                 <div>
                   <span className="text-xl font-black text-white block">
                     <AnimatedCounter value={networkStats.direct_count ?? 0} decimals={0} />

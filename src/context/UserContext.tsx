@@ -529,6 +529,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     };
   }, [isLoggedIn, uid, refreshUserData, applyProfileData]);
 
+  // ── 1. CUMULATIVE WAGER FUNCTION ──
   const addCumulativeWager = (amount: number) => {
     setCumulativeWagerState((prev: number) => {
       const next = prev + amount;
@@ -542,24 +543,26 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     });
   };
 
-  const addWageringProgress = (amount: number) => {
+  // ── 2. CLEAN ASYNC WAGERING PROGRESS FUNCTION ──
+  const addWageringProgress = async (amount: number) => {
     setWageringCompleted((prev: number) => prev + amount);
     addCumulativeWager(amount);
     
     if (uid && amount > 0) {
       try {
-        (supabase.rpc as any)('process_team_commission', {
+        const { error } = await (supabase.rpc as any)('process_team_commission', {
           p_subordinate_id: uid,
           p_processing_amount: amount
-        }).catch((commissionErr: any) => {
-          console.warn('Commission distribution failed:', commissionErr);
         });
+
+        if (error) {
+          console.warn('Commission distribution function returned an error:', error.message);
+        }
       } catch (commissionErr) {
-        console.warn('Commission distribution failed:', commissionErr);
+        console.warn('Commission distribution execution failed:', commissionErr);
       }
     }
   };
-
   const addDailyWagerProgress = (amount: number) => {
     setDailyWagerProgress((prev: number) => prev + amount);
   };

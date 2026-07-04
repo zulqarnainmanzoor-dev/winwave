@@ -35,18 +35,20 @@ export default function NewInviteesView({ onBack }: { onBack: () => void }) {
       from = monthStart.toISOString(); to = todayEnd.toISOString();
     }
 
-    supabase
-      .from("users")
-      .select("id, phone_number, invite_code, created_at")
-      .eq("referred_by", uid)
-      .gte("created_at", from)
-      .lt("created_at", to)
-      .order("created_at", { ascending: false })
-      .then(({ data }) => {
-        setInvitees((data as Invitee[]) ?? []);
-        setLoading(false);
-      });
-  }, [uid, activeTab]);
+supabase
+  .from("profiles") // Yahan 'users' se 'profiles' karo
+  .select("id, phone_number, invite_code, created_at")
+  .eq("inviter_code", uid) // Agar column name 'invited_by' hai to yahan change karo
+  .gte("created_at", from)
+  .lt("created_at", to)
+  .order("created_at", { ascending: false })
+  .then(({ data, error }) => {
+    if (error) {
+      console.error("Supabase Error:", error); // Error dekhna zaroori hai
+    }
+    setInvitees((data as Invitee[]) ?? []);
+    setLoading(false);
+  });
 
   const maskPhone = (p: string | null) =>
     p ? p.slice(0, 4) + "****" + p.slice(-2) : "---";
@@ -90,38 +92,53 @@ export default function NewInviteesView({ onBack }: { onBack: () => void }) {
           <div className="flex justify-center py-16">
             <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : invitees.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 space-y-4">
-            <div className="relative w-28 h-28 select-none flex items-center justify-center">
-              <div className="absolute w-16 h-20 bg-[#1C1C1E]/85 rounded-2xl border border-white/10 rotate-[-12deg] shadow-lg flex flex-col justify-end p-3">
-                <div className="w-10 h-1.5 bg-zinc-800 rounded-full mb-1.5" />
-                <div className="w-8 h-1.5 bg-zinc-800 rounded-full" />
-              </div>
-              <div className="absolute w-16 h-20 bg-[#2C2C2E]/95 rounded-2xl border border-white/20 translate-x-3.5 translate-y-1 rotate-[6deg] shadow-2xl flex flex-col p-3 justify-center gap-2.5">
-                <div className="w-11 h-1.5 bg-zinc-700/60 rounded-full" />
-                <div className="w-9 h-1.5 bg-zinc-700/60 rounded-full" />
-                <div className="w-10 h-1.5 bg-zinc-700/60 rounded-full" />
-              </div>
-            </div>
-            <span className="text-xs font-black text-gray-500 uppercase tracking-widest">No Records</span>
-          </div>
         ) : (
-          <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden">
-            <div className="grid grid-cols-3 bg-[#2C2C2E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">
-              <span>Phone</span>
-              <span>Invite Code</span>
-              <span>Joined</span>
-            </div>
-            <div className="divide-y divide-white/5">
-              {invitees.map((u) => (
-                <div key={u.id} className="grid grid-cols-3 p-3 text-xs text-center items-center">
-                  <span className="font-mono text-white font-bold">{maskPhone(u.phone_number)}</span>
-                  <span className="text-[#ffa502] font-bold">{u.invite_code ?? "—"}</span>
-                  <span className="text-gray-400">{fmtDate(u.created_at)}</span>
+          <>
+            {activeTab !== "yesterday" && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-3 text-center mb-3">
+                <div className="flex items-center justify-center gap-2">
+                  <span className="w-2 h-2 bg-red-400 rounded-full inline-block" />
+                  <p className="text-xs font-black text-red-400 uppercase tracking-wider">Stats are coming soon</p>
                 </div>
-              ))}
+              </div>
+            )}
+
+            <div className={activeTab === "yesterday" ? "" : "opacity-30 pointer-events-none blur-[1.5px]"}>
+              {invitees.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 space-y-4">
+                  <div className="relative w-28 h-28 select-none flex items-center justify-center">
+                    <div className="absolute w-16 h-20 bg-[#1C1C1E]/85 rounded-2xl border border-white/10 rotate-[-12deg] shadow-lg flex flex-col justify-end p-3">
+                      <div className="w-10 h-1.5 bg-zinc-800 rounded-full mb-1.5" />
+                      <div className="w-8 h-1.5 bg-zinc-800 rounded-full" />
+                    </div>
+                    <div className="absolute w-16 h-20 bg-[#2C2C2E]/95 rounded-2xl border border-white/20 translate-x-3.5 translate-y-1 rotate-[6deg] shadow-2xl flex flex-col p-3 justify-center gap-2.5">
+                      <div className="w-11 h-1.5 bg-zinc-700/60 rounded-full" />
+                      <div className="w-9 h-1.5 bg-zinc-700/60 rounded-full" />
+                      <div className="w-10 h-1.5 bg-zinc-700/60 rounded-full" />
+                    </div>
+                  </div>
+                  <span className="text-xs font-black text-gray-500 uppercase tracking-widest">No Records</span>
+                </div>
+              ) : (
+                <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden">
+                  <div className="grid grid-cols-3 bg-[#2C2C2E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">
+                    <span>Phone</span>
+                    <span>Invite Code</span>
+                    <span>Joined</span>
+                  </div>
+                  <div className="divide-y divide-white/5">
+                    {invitees.map((u) => (
+                      <div key={u.id} className="grid grid-cols-3 p-3 text-xs text-center items-center">
+                        <span className="font-mono text-white font-bold">{maskPhone(u.phone_number)}</span>
+                        <span className="text-[#ffa502] font-bold">{u.invite_code ?? "—"}</span>
+                        <span className="text-gray-400">{fmtDate(u.created_at)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>
