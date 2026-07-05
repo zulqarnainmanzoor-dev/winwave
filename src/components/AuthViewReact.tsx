@@ -247,7 +247,7 @@ export default function AuthView({
     setLoading(true);
 
     try {
-      const email = `user_${normalizedPhone}@winclub.com`;
+      const email = `user_${normalizedPhone}@winclub-officiall.vercel.app`;
 
       if (mode === "register") {
         const referralCode = inviteCode.trim() || null;
@@ -331,6 +331,16 @@ export default function AuthView({
         }
 
         // 1. Sign up the user with Supabase Auth
+        console.log('🔍 [AuthView] Registration flow starting:', {
+          '1. phone number before normalization': phone,
+          '2. phone number after normalization': normalizedPhone,
+          '3. email generated': email,
+          '4. password length': password.length,
+          '5. supabase URL': import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
+          '6. referralCode': referralCode,
+          '7. referrerUuid': referrerUuid,
+        });
+        
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
@@ -341,6 +351,18 @@ export default function AuthView({
               referrer_uuid: referrerUuid,
             },
           },
+        });
+
+        console.log('🔍 [AuthView] signUp result:', {
+          data,
+          error,
+          '8. exact error object': error ? {
+            name: error.name,
+            message: error.message,
+            status: error.status,
+            cause: error.cause,
+            stack: error.stack
+          } : null,
         });
 
         if (error) {
@@ -403,17 +425,81 @@ export default function AuthView({
         );
       } else {
         // LOGIN MODE
+        console.log('🔍 [AuthView] Login flow starting:', {
+          '1. phone number before normalization': phone,
+          '2. phone number after normalization': normalizedPhone,
+          '3. email generated': email,
+          '4. password length': password.length,
+          '5. supabase URL': import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
+          '5b. supabase URL from .env': process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
+          '5c. window location': window.location.href,
+        });
+        
+        console.log('🔍 [AuthView] Calling signInWithPassword with:', {
+          email,
+          passwordLength: password.length,
+          'supabase.auth.getSession() before': await supabase.auth.getSession(),
+        });
+        
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
+        console.log('🔍 [AuthView] signInWithPassword result:', {
+          data,
+          error,
+          '6. exact error object': error ? {
+            name: error.name,
+            message: error.message,
+            status: error.status,
+            cause: error.cause,
+            stack: error.stack,
+            'full error JSON': JSON.stringify(error, Object.getOwnPropertyNames(error))
+          } : null,
+        });
+
         if (error) {
           // Check if the phone number exists in public.users first
-          const { count } = await supabase
+          console.log('🔍 [AuthView] Checking if phone exists in public.users:', normalizedPhone);
+          const { count, error: countError } = await supabase
             .from("users")
             .select("id", { count: "exact", head: true })
             .eq("phone_number", normalizedPhone);
+          
+          console.log('🔍 [AuthView] public.users check result:', {
+            count,
+            countError,
+            '7. phone exists in public.users': count > 0,
+          });
+          
+          // Also check auth.users for the email
+          console.log('🔍 [AuthView] Checking auth.users for email:', email);
+          try {
+            const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(email);
+            console.log('🔍 [AuthView] auth.users check result:', {
+              authUser,
+              authError,
+              '8. auth.users record exists': !!authUser?.user,
+            });
+          } catch (authErr) {
+            console.log('🔍 [AuthView] auth.users check failed:', authErr);
+          }
+          
+          // Check if IDs match
+          if (count > 0) {
+            const { data: userData } = await supabase
+              .from("users")
+              .select("id")
+              .eq("phone_number", normalizedPhone)
+              .maybeSingle();
+            
+            console.log('🔍 [AuthView] public.users ID:', userData?.id);
+            console.log('🔍 [AuthView] auth.users ID (from email): would need admin API');
+            console.log('🔍 [AuthView] 9. IDs match check: need both IDs to compare');
+          }
+          
+          console.log('🔍 [AuthView] 10. First divergence point: signInWithPassword returned error:', error.message);
 
           if (count === 0 || count === null) {
             setError(
