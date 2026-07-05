@@ -20,7 +20,7 @@ export default function Sidebar({ sections, activeSection, onChange }: SidebarPr
         <div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-amber-500/15 text-amber-300">A</div>
         <div>
           <p className="text-xs uppercase tracking-[0.35em] text-gray-400">Admin</p>
-          <h2 className="text-xl font-black">WinWave</h2>
+          <h2 className="text-xl font-black">WinClub</h2>
         </div>
       </div>
 

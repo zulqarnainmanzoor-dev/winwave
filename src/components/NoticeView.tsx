@@ -10,7 +10,7 @@ export default function NoticeView({ onBack }: NoticeViewProps) {
     {
       id: 1,
       title: "JOIN AS AGENT",
-      content: "Join now and start earning with Winwave Team",
+      content: "Join now and start earning with WinClub Team",
       time: "2026-05-17 16:43:23",
     },
     {

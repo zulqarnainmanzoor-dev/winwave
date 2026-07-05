@@ -1,10 +1,10 @@
 export const translations = {
   EN: {
-    brand: "WIN WAVE",
-    logoText: "WW",
+    brand: "WIN CLUB",
+    logoText: "WC",
     megaJackpot: "Mega Jackpot",
     winUpTo: "Win up to",
-    notice: "Welcome to WINWAVE platform, we will serve you wholeheartedly!",
+    notice: "Welcome to WINCLUB platform, we will serve you wholeheartedly!",
     detail: "Detail",
     winningInfo: "Winning information",
     game: "Game",
@@ -95,11 +95,11 @@ export const translations = {
     invitationCodePlaceholder: "Invitation code (optional)"
   },
   UR: {
-    brand: "WIN WAVE",
-    logoText: "WW",
+    brand: "WIN CLUB",
+    logoText: "WC",
     megaJackpot: "میگا جیک پاٹ",
     winUpTo: "تک جیتیں",
-    notice: "WINWAVE پلیٹ فارم میں خوش آمدید، ہم پورے دل سے آپ کی خدمت کریں گے!",
+    notice: "WINCLUB پلیٹ فارم میں خوش آمدید، ہم پورے دل سے آپ کی خدمت کریں گے!",
     detail: "تفصیل",
     winningInfo: "جیتنے کی معلومات",
     game: "کھیل",

@@ -215,7 +215,7 @@ export default function InvitationRulesView({ onBack }: InvitationRulesViewProps
             </div>
           </div>
 
-          {/* Rule 08 - Shield with "W" instead of "P" and POPZAR replaced with WINWAVE */}
+          {/* Rule 08 - Shield with "W" instead of "P" and POPZAR replaced with WINCLUB */}
           <div className="bg-[#161618] border border-[#ffa502]/10 rounded-3xl p-5 flex gap-4 items-start relative overflow-hidden transition-all hover:border-[#ffa502]/30">
             <div className="absolute top-3 right-4 text-3xl font-black text-[#ffa502]/10 select-none">
               08
@@ -236,7 +236,7 @@ export default function InvitationRulesView({ onBack }: InvitationRulesViewProps
             <div className="flex-1 space-y-1">
               <span className="text-xs font-black text-[#ffa502] uppercase tracking-wider block">Final Interpretation</span>
               <p className="text-xs font-medium text-gray-300 leading-relaxed font-sans">
-                The final interpretation of this activity belongs to <span className="text-[#ffa502] font-black">WINWAVE</span> – Best Online Casino in Pakistan, Promo Code Pakistan.
+                The final interpretation of this activity belongs to <span className="text-[#ffa502] font-black">WINCLUB</span> – Best Online Casino in Pakistan, Promo Code Pakistan.
               </p>
             </div>
           </div>

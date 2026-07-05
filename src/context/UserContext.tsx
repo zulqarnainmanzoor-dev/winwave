@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { adminSupabase } from '../lib/adminSupabase';
 
 export interface BankDetails {
   easypaisa: { name: string; account: string; remarks: string; } | null;
@@ -281,7 +282,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   };
 
   const setBalance = (value: number) => {
-    setMainWalletBalance(value - thirdPartyWalletBalance);
+    setMainWalletBalance(value);
   };
 
   const transferWallet = useCallback((direction: 'to-game' | 'to-main', amount: number) => {
@@ -382,7 +383,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     if (error) {
       console.error('Failed to refresh profile data:', error);
     } else if (data) {
-      const userData = data as UserProfileSchema & { withdrawal_pin?: string; bank_details?: any; invite_code?: string; referred_by?: string };
+      const userData = data as unknown as UserProfileSchema & { withdrawal_pin?: string; bank_details?: any; invite_code?: string; referred_by?: string };
       
       // Set referral code from either field
       const refCode = userData.referral_code || userData.invite_code || '';
@@ -419,7 +420,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       applyProfileData(userData as ProfileRow);
     }
 
-    const { count: refCount } = await supabase
+    const { count: refCount } = await adminSupabase
       .from('users')
       .select('id', { count: 'exact', head: true })
       .eq('referred_by', userId);
@@ -586,6 +587,17 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     addCumulativeWager(amount);
     
     if (uid && amount > 0) {
+      // Write wagering_completed to DB directly (trg_wagering_on_bet_insert is broken
+      // because it fires only when status='completed' but bets are inserted as 'pending')
+      try {
+        await (supabase as any)
+          .from('users')
+          .update({ wagering_completed: (wageringCompleted + amount) })
+          .eq('id', uid);
+      } catch (wagerErr) {
+        console.warn('wagering_completed DB update failed:', wagerErr);
+      }
+
       try {
         const { error } = await (supabase.rpc as any)('process_team_commission', {
           p_subordinate_id: uid,
@@ -632,7 +644,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
   const fetchReferrals = useCallback(async (): Promise<Array<{ id: string; phone: string; joined_at: string }>> => {
     if (!uid) return [];
-    const { data, error } = await supabase
+    const { data, error } = await adminSupabase
       .from('users')
       .select('id, phone_number, created_at')
       .eq('referred_by', uid)

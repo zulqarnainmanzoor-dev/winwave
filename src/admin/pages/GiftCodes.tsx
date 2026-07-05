@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { adminSupabase as supabase } from "../../lib/adminSupabase";
+import { adminSupabase } from "../../lib/adminSupabase";
 import { Plus, Pause, Play, Trash2, RefreshCw } from "lucide-react";
 
 type GiftCodeRow = {
@@ -14,6 +14,7 @@ type GiftCodeRow = {
 };
 
 export function GiftCodes() {
+  const supabase = adminSupabase as any;
   const [codes, setCodes]         = useState<GiftCodeRow[]>([]);
   const [loading, setLoading]     = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -25,7 +26,7 @@ export function GiftCodes() {
     setLoading(true);
     setError("");
     try {
-      const { data, error } = await supabase
+      const { data, error } = await (adminSupabase as any)
         .from("gift_codes")
         .select("*")
         .neq("status", "deleted")

@@ -93,21 +93,81 @@ export default function AuthView({
 
   const normalizePhone = (value: string) => value.replace(/\D/g, "");
 
+  const generateInviteCode = async (): Promise<string> => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      // Generate 9-digit numeric code (100000000 to 999999999)
+      const candidate = Math.floor(100000000 + Math.random() * 900000000).toString();
+
+      try {
+        const { data, error } = await supabase
+          .from("users")
+          .select("id")
+          .eq("referral_code", candidate)
+          .maybeSingle();
+
+        if (error) {
+          console.warn("Invite code uniqueness lookup failed, using fallback code", {
+            candidate,
+            error,
+          });
+          return candidate;
+        }
+
+        if (!data) {
+          return candidate;
+        }
+      } catch (lookupError: any) {
+        console.warn("Invite code lookup threw, using fallback code", {
+          candidate,
+          error: lookupError?.message,
+        });
+        return candidate;
+      }
+    }
+
+    // Fallback: use timestamp-based 9-digit code
+    return Date.now().toString().slice(-9);
+  };
+
   const upsertOwnProfile = async ({
     userId,
     phoneNumber,
     inviterCode,
+    referrerId,
   }: {
     userId: string;
     phoneNumber: string;
     inviterCode?: string | null;
+    referrerId?: string | null;
   }) => {
     try {
+      // Generate referral code if this is a new user
+      let referralCode: string | null = null;
+      
+      // Check if user already exists
+      const { data: existingUser, error: checkError } = await supabase
+        .from("users")
+        .select("referral_code")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (checkError) {
+        console.warn("Failed to check existing user:", checkError);
+      }
+
+      // Only generate if user doesn't have a referral_code yet
+      if (!existingUser?.referral_code) {
+        referralCode = await generateInviteCode();
+        console.log("✅ Generated referral code for new user:", referralCode);
+      }
+
       const { error } = await supabase.from("users").upsert(
         {
           id: userId,
           phone_number: phoneNumber,
           inviter_code: inviterCode?.trim().toUpperCase() || null,
+          referred_by: referrerId || null,
+          referral_code: referralCode || undefined, // Only set if we generated it
           updated_at: new Date().toISOString(),
         },
         { onConflict: "id" }
@@ -187,7 +247,7 @@ export default function AuthView({
     setLoading(true);
 
     try {
-      const email = `${normalizedPhone}@winwave.com`;
+      const email = `user_${normalizedPhone}@winclub.com`;
 
       if (mode === "register") {
         const referralCode = inviteCode.trim() || null;
@@ -318,6 +378,7 @@ export default function AuthView({
           userId: data.user?.id || "",
           phoneNumber: normalizedPhone,
           inviterCode: referralCode ? referralCode.trim().toUpperCase() : null,
+          referrerId: referrerUuid,
         });
 
         // 3. Store last used phone number
@@ -375,11 +436,11 @@ export default function AuthView({
           localStorage.setItem("winwave_last_phone", normalizedPhone);
         }
 
-        // Temporary launch-safe fallback: ensure the profile row exists after login.
-        await upsertOwnProfile({
-          userId: data.user?.id || "",
-          phoneNumber: normalizedPhone,
-        });
+        // Ensure phone_number is up to date — do NOT touch referred_by or inviter_code on login.
+        await supabase
+          .from("users")
+          .update({ phone_number: normalizedPhone, updated_at: new Date().toISOString() })
+          .eq("id", data.user?.id || "");
 
         // On login, we might want to fetch the user's invite_code from the DB
         // but we can also let the parent component handle that.

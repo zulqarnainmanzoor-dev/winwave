@@ -1,376 +1,30 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
+type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
+
+type GenericTable = {
+  Row: Record<string, unknown>;
+  Insert: Record<string, unknown>;
+  Update: Record<string, unknown>;
+  Relationships: Array<Record<string, unknown>>;
+};
+
+type GenericFunction = {
+  Args: Record<string, unknown>;
+  Returns: unknown;
+  SetofOptions?: Record<string, unknown>;
+};
+
 // Define the interface for our Database (Optional but recommended for type safety)
 export interface Database {
   public: {
-    Tables: {
-      users: {
-        Row: {
-          id: string;
-          phone_number: string | null;
-          email: string | null;
-          main_balance: number | null;
-          game_balance: number | null;
-          wagering_required: number | null;
-          total_bets: number | null;
-          vip_level: number | null;
-          invite_code: string | null;
-          inviter_code: string | null;
-          referred_by: string | null;
-          registered_ip: string | null;
-          withdrawal_pin: string | null;
-          wallet_details: Json | null;
-          bank_details: Json | null;
-          wagered_amount: number | null;
-          referral_code: string | null;
-          created_at: string;
-        };
-        Insert: {
-          id: string;
-          phone_number?: string | null;
-          email?: string | null;
-          main_balance?: number | null;
-          game_balance?: number | null;
-          wagering_required?: number | null;
-          total_bets?: number | null;
-          vip_level?: number | null;
-          invite_code?: string | null;
-          inviter_code?: string | null;
-          referred_by?: string | null;
-          registered_ip?: string | null;
-          withdrawal_pin?: string | null;
-          wallet_details?: Json | null;
-          bank_details?: Json | null;
-          wagered_amount?: number | null;
-          referral_code?: string | null;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          phone_number?: string | null;
-          email?: string | null;
-          main_balance?: number | null;
-          game_balance?: number | null;
-          wagering_required?: number | null;
-          total_bets?: number | null;
-          vip_level?: number | null;
-          invite_code?: string | null;
-          inviter_code?: string | null;
-          referred_by?: string | null;
-          registered_ip?: string | null;
-          withdrawal_pin?: string | null;
-          wallet_details?: Json | null;
-          bank_details?: Json | null;
-          wagered_amount?: number | null;
-          referral_code?: string | null;
-          created_at?: string;
-        };
-      };
-      wallets: {
-        Row: {
-          id: string;
-          user_id: string;
-          main_balance: number | null;
-          game_balance: number | null;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          main_balance?: number | null;
-          game_balance?: number | null;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          main_balance?: number | null;
-          game_balance?: number | null;
-          created_at?: string;
-        };
-      };
-      registration_attempts: {
-        Row: {
-          id: string;
-          ip: string;
-          phone_number: string;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          ip: string;
-          phone_number: string;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          ip?: string;
-          phone_number?: string;
-          created_at?: string;
-        };
-      };
-      security_events: {
-        Row: {
-          id: string;
-          event_type: string;
-          phone_number: string;
-          ip: string | null;
-          metadata: Json | null;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          event_type: string;
-          phone_number: string;
-          ip?: string | null;
-          metadata?: Json | null;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          event_type?: string;
-          phone_number?: string;
-          ip?: string | null;
-          metadata?: Json | null;
-          created_at?: string;
-        };
-      };
-      transactions: {
-        Row: {
-          id: string;
-          user_id: string;
-          type: string;
-          amount: number;
-          status: string;
-          gateway_ref: string | null;
-          bonus: number | null;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          type: string;
-          amount: number;
-          status: string;
-          gateway_ref?: string | null;
-          bonus?: number | null;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          type?: string;
-          amount?: number;
-          status?: string;
-          gateway_ref?: string | null;
-          bonus?: number | null;
-          created_at?: string;
-        };
-      };
-      game_rounds: {
-        Row: {
-          id: string;
-          game_type: string;
-          status: string;
-          started_at: string | null;
-          ends_at: string | null;
-          result_size: string | null;
-          forced_outcome: string | null;
-          total_big: number | null;
-          total_small: number | null;
-        };
-        Insert: {
-          id?: string;
-          game_type: string;
-          status?: string;
-          started_at?: string | null;
-          ends_at?: string | null;
-          result_size?: string | null;
-          forced_outcome?: string | null;
-          total_big?: number | null;
-          total_small?: number | null;
-        };
-        Update: {
-          id?: string;
-          game_type?: string;
-          status?: string;
-          started_at?: string | null;
-          ends_at?: string | null;
-          result_size?: string | null;
-          forced_outcome?: string | null;
-          total_big?: number | null;
-          total_small?: number | null;
-        };
-      };
-      bets: {
-        Row: {
-          id: string;
-          user_id: string;
-          amount: number;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          amount: number;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          amount?: number;
-          created_at?: string;
-        };
-      };
-      withdraw_requests: {
-        Row: {
-          id: string;
-          user_id: string;
-          amount: number;
-          account_number: string;
-          status: string;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          amount: number;
-          account_number: string;
-          status?: string;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          amount?: number;
-          account_number?: string;
-          status?: string;
-          created_at?: string;
-        };
-      };
-      user_banks: {
-        Row: {
-          id: string;
-          user_id: string;
-          bank_name: string;
-          account_name: string;
-          account_number: string;
-          ifsc_code: string | null;
-          upi_id: string | null;
-          created_at: string;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          bank_name: string;
-          account_name: string;
-          account_number: string;
-          ifsc_code?: string | null;
-          upi_id?: string | null;
-          created_at?: string;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          bank_name?: string;
-          account_name?: string;
-          account_number?: string;
-          ifsc_code?: string | null;
-          upi_id?: string | null;
-          created_at?: string;
-        };
-      };
-      withdrawal_history: {
-        Row: {
-          id: string;
-          user_id: string;
-          amount: number;
-          method: string;
-          account_number: string;
-          account_name: string | null;
-          status: string;
-          gateway_ref: string | null;
-          gateway_error_logs: string | null;
-          reason: string | null;
-          remarks: string | null;
-          created_at: string;
-          updated_at: string | null;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          amount: number;
-          method: string;
-          account_number: string;
-          account_name?: string | null;
-          status?: string;
-          gateway_ref?: string | null;
-          gateway_error_logs?: string | null;
-          reason?: string | null;
-          remarks?: string | null;
-          created_at?: string;
-          updated_at?: string | null;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          amount?: number;
-          method?: string;
-          account_number?: string;
-          account_name?: string | null;
-          status?: string;
-          gateway_ref?: string | null;
-          gateway_error_logs?: string | null;
-          reason?: string | null;
-          remarks?: string | null;
-          created_at?: string;
-          updated_at?: string | null;
-        };
-      };
-      deposit_history: {
-        Row: {
-          id: string;
-          user_id: string;
-          amount: number;
-          method: string;
-          order_id: string | null;
-          status: string;
-          gateway_ref: string | null;
-          remarks: string | null;
-          created_at: string;
-          updated_at: string | null;
-        };
-        Insert: {
-          id?: string;
-          user_id: string;
-          amount: number;
-          method?: string;
-          order_id?: string | null;
-          status?: string;
-          gateway_ref?: string | null;
-          remarks?: string | null;
-          created_at?: string;
-          updated_at?: string | null;
-        };
-        Update: {
-          id?: string;
-          user_id?: string;
-          amount?: number;
-          method?: string;
-          order_id?: string | null;
-          status?: string;
-          gateway_ref?: string | null;
-          remarks?: string | null;
-          created_at?: string;
-          updated_at?: string | null;
-        };
-      };
-    };
+    Tables: Record<string, GenericTable>;
+    Views: Record<string, GenericTable>;
+    Functions: Record<string, GenericFunction>;
+    Enums: Record<string, unknown>;
   };
 }
-
-type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || '';
@@ -381,7 +35,7 @@ if (!supabaseUrl || !supabaseKey) {
   console.warn('Supabase backend client created without URL or key. Set SUPABASE_URL or VITE_SUPABASE_URL, and a valid SERVICE_ROLE_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, or VITE_SUPABASE_ANON_KEY.');
 }
 
-export const supabase: SupabaseClient<Database> = createClient<Database>(supabaseUrl, supabaseKey, {
+export const supabase: SupabaseClient<any> = createClient<any>(supabaseUrl, supabaseKey, {
   auth: {
     persistSession: false,
   },
@@ -392,7 +46,7 @@ if (!supabaseAdminKey) {
   console.warn('Supabase admin client is missing a service role key; server-side writes may be blocked by RLS.');
 }
 
-export const supabaseAdmin: SupabaseClient<Database> = createClient<Database>(supabaseUrl, supabaseAdminKey, {
+export const supabaseAdmin: SupabaseClient<any> = createClient<any>(supabaseUrl, supabaseAdminKey, {
   auth: {
     persistSession: false,
   },

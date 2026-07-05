@@ -167,11 +167,13 @@ async function resolveRound(
   interval: number,
   dbRound: { id: string; period: string; target_result: string | null }
 ): Promise<void> {
-  // Fetch pending bets for margin calculation
+  // Fetch pending bets — match by round_id OR period+game_type to catch bets
+  // placed before round_id was available on the client
   const { data: bets } = await supabase
     .from("betting_history")
     .select("bet_type, bet_value, amount, user_id, id")
-    .eq("round_id", dbRound.id)
+    .eq("game_type", "wingo")
+    .eq("period", dbRound.period)
     .eq("status", "pending");
 
   const pendingBets = bets ?? [];
@@ -191,15 +193,34 @@ async function resolveRound(
   // Resolve each bet
   for (const bet of pendingBets) {
     let isWin = false;
-    if (bet.bet_type === "size")   isWin = bet.bet_value === result.size;
-    if (bet.bet_type === "number") isWin = Number(bet.bet_value) === result.number;
-    if (bet.bet_type === "color") {
-      isWin =
-        (bet.bet_value === "Green"  && (result.color === "green"  || result.number === 5)) ||
-        (bet.bet_value === "Red"    && (result.color === "red"    || result.number === 0)) ||
-        (bet.bet_value === "Violet" && result.color === "violet");
+    let winMultiplier = 0;
+
+    if (bet.bet_type === "size") {
+      isWin = bet.bet_value === result.size;
+      winMultiplier = 1.96;
     }
-    const winAmount = isWin ? bet.amount * (bet.bet_type === "number" ? 9 : 1.96) : 0;
+
+    if (bet.bet_type === "number") {
+      isWin = Number(bet.bet_value) === result.number;
+      winMultiplier = 9;
+    }
+
+    if (bet.bet_type === "color") {
+      if (bet.bet_value === "Green") {
+        // Green wins on 1,3,7,9 (pure green) at 2x, and on 5 (violet+green) at 1.5x
+        if (result.color === "green") { isWin = true; winMultiplier = 1.96; }
+        else if (result.number === 5)  { isWin = true; winMultiplier = 1.5;  }
+      } else if (bet.bet_value === "Red") {
+        // Red wins on 2,4,6,8 (pure red) at 2x, and on 0 (violet+red) at 1.5x
+        if (result.color === "red")    { isWin = true; winMultiplier = 1.96; }
+        else if (result.number === 0)  { isWin = true; winMultiplier = 1.5;  }
+      } else if (bet.bet_value === "Violet") {
+        // Violet wins only on 0 or 5 at 4.5x
+        if (result.color === "violet") { isWin = true; winMultiplier = 4.5;  }
+      }
+    }
+
+    const winAmount = isWin ? bet.amount * winMultiplier : 0;
 
     await supabase
       .from("betting_history")
@@ -213,12 +234,40 @@ async function resolveRound(
       })
       .eq("id", bet.id);
 
-    // Atomically credit winner balance via RPC (removed redundant update)
-    if (isWin && winAmount > 0) {
-      await supabase.rpc("credit_user_balance" as any, {
-        p_user_id: bet.user_id,
-        p_amount:  winAmount,
-      });
+    // Credit winner balance + update user stats atomically via RPC
+    // The RPC uses SQL expressions (col + delta) so no read-modify-write race.
+    const { error: statsErr } = await (supabase as any).rpc("settle_bet_stats", {
+      p_user_id:    bet.user_id,
+      p_bet_amount: bet.amount,
+      p_win_amount: winAmount,
+      p_is_win:     isWin,
+    });
+    if (statsErr) {
+      // RPC not deployed yet — fall back to direct balance credit for winners
+      if (isWin && winAmount > 0) {
+        const { data: walletRow, error: readErr } = await supabase
+          .from("users")
+          .select("main_balance")
+          .eq("id", bet.user_id)
+          .maybeSingle();
+        if (!readErr) {
+          const current    = Number((walletRow as any)?.main_balance ?? 0);
+          const newBalance = current + winAmount;
+          const { error: writeErr } = await supabase
+            .from("users")
+            .update({ main_balance: newBalance })
+            .eq("id", bet.user_id);
+          if (writeErr) {
+            console.error(`[WinGo] Balance write failed user=${bet.user_id}`, writeErr);
+          } else {
+            console.log(`[WinGo] Credited user=${bet.user_id} | ${current} + ${winAmount} = ${newBalance}`);
+          }
+        } else {
+          console.error(`[WinGo] Balance read failed user=${bet.user_id}`, readErr);
+        }
+      }
+    } else {
+      if (isWin) console.log(`[WinGo] Settled user=${bet.user_id} win=${winAmount}`);
     }
 
     // Track for margin window
@@ -279,14 +328,15 @@ async function tick(): Promise<void> {
 
   for (const { mode, interval, prefix } of MODES) {
     try {
-      // Find expired active rounds
+      // Find expired active rounds (with 1s grace so client countdown always reaches 0 first)
+      const graceMs = new Date(now.getTime() - 1000).toISOString();
       const { data: expired } = await supabase
         .from("game_rounds")
         .select("id, period, target_result")
         .eq("game_type", "wingo")
         .eq("mode", mode)
         .eq("status", "active")
-        .lte("ends_at", now.toISOString())
+        .lte("ends_at", graceMs)
         .order("ends_at", { ascending: true });
 
       for (const round of expired ?? []) {

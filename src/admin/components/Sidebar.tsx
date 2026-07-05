@@ -129,7 +129,7 @@ export function Sidebar() {
             <span className="text-white font-bold text-lg">⚙️</span>
           </div>
           <div>
-            <h2 className="text-white font-bold text-lg leading-tight">WinWave Admin</h2>
+            <h2 className="text-white font-bold text-lg leading-tight">WinClub Admin</h2>
             <p className="text-gray-400 text-xs">{adminRole === "sub-admin" ? "Sub-Admin" : "Control Panel"}</p>
           </div>
         </div>
@@ -184,7 +184,7 @@ export function Sidebar() {
           <LogOut className="w-5 h-5" />
           <span className="font-medium text-sm">Logout</span>
         </button>
-        <p className="text-gray-600 text-xs mt-3 text-center">© 2026 WinWave</p>
+        <p className="text-gray-600 text-xs mt-3 text-center">© 2026 WinClub</p>
       </div>
     </div>
   );
@@ -227,7 +227,7 @@ export function Sidebar() {
               <div className="w-9 h-9 bg-orange-500 rounded-lg flex items-center justify-center shrink-0">
                 <span className="text-white font-bold">⚙️</span>
               </div>
-              <span className="text-white font-bold">WinWave Admin</span>
+              <span className="text-white font-bold">WinClub Admin</span>
             </div>
             <button onClick={() => setDrawerOpen(false)}
               className="p-2 text-gray-400 hover:text-white min-h-[44px] min-w-[44px] flex items-center justify-center">

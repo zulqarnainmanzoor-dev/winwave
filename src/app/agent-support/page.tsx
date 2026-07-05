@@ -23,7 +23,7 @@ export default function AgentSupportPage() {
     {
       icon: <Mail className="w-6 h-6" />,
       title: "Email Support",
-      description: "support@winwave.com",
+      description: "support@winclub.com",
       action: "Send Email",
       color: "#f97316",
     },

@@ -122,11 +122,11 @@ export function AdminProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [stats] = useState({
-    totalRechargeToday: 2500000,
-    totalActiveUsers: 1234,
-    totalUsers: 5678,
-    totalWithdrawals: 1200000,
-    totalBalance: 8500000,
+    totalRechargeToday: 0,
+    totalActiveUsers: 0,
+    totalUsers: 0,
+    totalWithdrawals: 0,
+    totalBalance: 0,
   });
 
   const updateGameSettings = (gameType: string, settings: GameControlSettings) => {

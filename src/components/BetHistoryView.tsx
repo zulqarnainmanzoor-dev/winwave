@@ -36,7 +36,7 @@ export default function BetHistoryView({ onBack }: { onBack: () => void }) {
       const { data, error } = await supabase
         .from("betting_history")
         .select(`
-          id, amount, period, bet_type, bet_value, payout, status, created_at,
+          id, amount, period, bet_type, bet_value, win_amount, status, created_at,
           game_round:round_id (result_number, result_size, result_color)
         `)
         .eq("user_id", uid)
@@ -55,7 +55,7 @@ export default function BetHistoryView({ onBack }: { onBack: () => void }) {
         result_number: r.game_round?.result_number ?? null,
         result_size: r.game_round?.result_size ?? null,
         result_color: r.game_round?.result_color ?? null,
-        payout: r.payout ? Number(r.payout) : null,
+        payout: r.win_amount ? Number(r.win_amount) : null,
         status: r.status || "pending",
         created_at: r.created_at,
       }));

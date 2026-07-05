@@ -105,7 +105,7 @@ router.post('/register', async (req, res) => {
     if (!password || password.length < 6) return res.status(400).json({ ok: false, error: 'Invalid password' });
 
     const cleanPhone = normalizedPhone.trim();
-    const userEmail = `${cleanPhone}@winwave.com`;
+    const userEmail = `user_${cleanPhone}@winwave.com`;
 
     // ============================================================
     // REFERRAL LOGIC: Look up referrer by referral_code in public.users

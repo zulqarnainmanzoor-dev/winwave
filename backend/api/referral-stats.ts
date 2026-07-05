@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { supabase } from '../database/db';
+import { supabase, supabaseAdmin } from '../database/db';
 
 const router = Router();
 
@@ -16,6 +16,8 @@ router.get('/stats/:userId', async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
+    const client = supabaseAdmin || supabase;
+
     // Build level filter - fetch IDs at each level
     let targetIds: string[] = [userId];
     let currentLevelIds = [userId];
@@ -23,7 +25,7 @@ router.get('/stats/:userId', async (req, res) => {
     const maxLevel = level && level !== 'All' ? parseInt(level as string) : 7;
 
     for (let i = 1; i <= maxLevel; i++) {
-      const { data: levelUsers, error } = await supabase
+      const { data: levelUsers, error } = await client
         .from('users')
         .select('id')
         .in('referred_by', currentLevelIds);
@@ -36,6 +38,13 @@ router.get('/stats/:userId', async (req, res) => {
 
       if (levelIds.length === 0) break;
     }
+
+    const { data: directUsers, error: directError } = await client
+      .from('users')
+      .select('id')
+      .eq('referred_by', userId);
+
+    if (directError) throw directError;
 
     if (targetIds.length === 1) {
       return res.json({
@@ -51,7 +60,7 @@ router.get('/stats/:userId', async (req, res) => {
     }
 
     // Fetch deposit stats with date filter
-    let depositQuery = supabase
+    let depositQuery = client
       .from('deposit_history')
       .select('user_id, amount, status')
       .in('user_id', targetIds)
@@ -68,7 +77,7 @@ router.get('/stats/:userId', async (req, res) => {
     if (depositError) throw depositError;
 
     // Fetch bet stats with date filter
-    let betQuery = supabase
+    let betQuery = client
       .from('betting_history')
       .select('user_id, amount')
       .in('user_id', targetIds);
@@ -93,7 +102,7 @@ router.get('/stats/:userId', async (req, res) => {
     res.json({
       success: true,
       stats: {
-        total_users: targetIds.length - 1, // Exclude the user themselves
+        total_users: (directUsers || []).length,
         total_deposits: totalDeposits,
         total_bets: totalBets,
         deposit_users: depositUsers.size,
@@ -120,13 +129,15 @@ router.get('/subordinates/:userId', async (req, res) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
+    const client = supabaseAdmin || supabase;
+
     // Build hierarchy
     let allSubordinates: any[] = [];
     let currentLevelIds = [userId];
     const maxLevel = level && level !== 'All' ? parseInt(level as string) : 7;
 
     for (let i = 1; i <= maxLevel; i++) {
-      const { data: users, error } = await supabase
+      const { data: users, error } = await client
         .from('users')
         .select('id, invite_code, total_deposit, total_bets, created_at, phone_number, referred_by')
         .in('referred_by', currentLevelIds);
@@ -170,6 +181,47 @@ router.get('/subordinates/:userId', async (req, res) => {
   } catch (error: any) {
     console.error('Error fetching subordinates:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch subordinates' });
+  }
+});
+
+router.get('/invitees/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { from, to, search, limit, offset } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    const client = supabaseAdmin || supabase;
+    const pageSize = Math.max(1, Math.min(100, Number(limit || 20)));
+    const pageOffset = Math.max(0, Number(offset || 0));
+
+    let query = client
+      .from('users')
+      .select('id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by', { count: 'exact' })
+      .eq('referred_by', userId)
+      .order('created_at', { ascending: false });
+
+    if (from) query = query.gte('created_at', String(from));
+    if (to) query = query.lt('created_at', String(to));
+    if (search) {
+      const term = String(search).trim();
+      query = query.or(`phone_number.ilike.%${term}%,referral_code.ilike.%${term}%,invite_code.ilike.%${term}%,id.ilike.%${term}%`);
+    }
+
+    const { data, error, count } = await query.range(pageOffset, pageOffset + pageSize - 1);
+
+    if (error) throw error;
+
+    return res.json({
+      success: true,
+      invitees: data || [],
+      total: count ?? (data || []).length,
+    });
+  } catch (error: any) {
+    console.error('Error fetching invitees:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch invitees' });
   }
 });
 

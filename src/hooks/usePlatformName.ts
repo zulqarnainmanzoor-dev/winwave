@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-export function usePlatformName(fallback = "WinWave") {
+export function usePlatformName(fallback = "WinClub") {
   const [name, setName] = useState<string>(fallback);
 
   useEffect(() => {

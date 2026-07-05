@@ -38,7 +38,8 @@ export default function GameHistoryView({ onBack }: { onBack: () => void }) {
         .from("game_rounds")
         .select("id, period, game_type, mode, result_number, result_size, result_color, total_big, total_small, status, started_at, ends_at, created_at")
         .eq("game_type", "wingo")
-        .order("created_at", { ascending: false })
+        .eq("status", "completed")
+        .order("ends_at", { ascending: false })
         .limit(200);
 
       if (modeFilter !== "all") {

@@ -21,6 +21,7 @@ interface Member {
 }
 
 export function MemberManagement() {
+  const supabase = adminSupabase as any;
   const [searchQuery, setSearchQuery] = useState("");
   const [searchType, setSearchType] = useState<"uid" | "phone" | "email">("uid");
   const [selectedMember, setSelectedMember] = useState<Member | null>(null);
@@ -39,7 +40,7 @@ export function MemberManagement() {
       setError("");
       try {
         // Fetch ALL users regardless of status using service role (bypasses RLS)
-        const { data: users, error: usersError } = await adminSupabase
+        const { data: users, error: usersError } = await supabase
           .from('users')
           .select('id, phone_number, invite_code, created_at, vip_level, is_agent, main_balance, game_balance, status')
           .order('created_at', { ascending: false })
@@ -51,7 +52,7 @@ export function MemberManagement() {
           id: row.id,
           uid: row.invite_code || row.id.replace(/-/g,'').slice(0,6).toUpperCase(),
           phone: row.phone_number || '',
-          email: `${row.phone_number || 'member'}@winwave.com`,
+          email: `${row.phone_number || 'member'}@winclub.com`,
           username: `MEMBER_${(row.phone_number || '').slice(-4) || row.invite_code || '----'}`,
           joined: row.created_at || '',
           deposits: 0,
@@ -92,7 +93,22 @@ export function MemberManagement() {
       const nextBalance = adjustmentType === 'add'
         ? selectedMember.balance + amount
         : Math.max(0, selectedMember.balance - amount);
-      const { error } = await adminSupabase.from('users').update({ main_balance: nextBalance }).eq('id', selectedMember.id);
+
+      // When adding balance, also increment wagering_required so the user
+      // must wager the credited amount before withdrawing.
+      const updatePayload: Record<string, any> = { main_balance: nextBalance };
+      if (adjustmentType === 'add') {
+        // Read current wagering_required first
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('wagering_required')
+          .eq('id', selectedMember.id)
+          .maybeSingle();
+        const currentWager = Number((userRow as any)?.wagering_required ?? 0);
+        updatePayload.wagering_required = currentWager + amount;
+      }
+
+      const { error } = await supabase.from('users').update(updatePayload).eq('id', selectedMember.id);
       if (error) throw error;
       setMembers(prev => prev.map(m => m.id === selectedMember.id ? { ...m, balance: nextBalance } : m));
       setSelectedMember(prev => prev ? { ...prev, balance: nextBalance } : prev);
@@ -114,7 +130,7 @@ export function MemberManagement() {
     if (!confirmed) return;
     setUpdating(true); setError('');
     try {
-      const { error } = await adminSupabase.from('users').update({ status: nextStatus }).eq('id', selectedMember.id);
+      const { error } = await supabase.from('users').update({ status: nextStatus }).eq('id', selectedMember.id);
       if (error) throw error;
       setMembers(prev => prev.map(m => m.id === selectedMember.id ? { ...m, status: nextStatus } : m));
       setSelectedMember(prev => prev ? { ...prev, status: nextStatus } : prev);

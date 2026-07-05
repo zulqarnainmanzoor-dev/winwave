@@ -3,7 +3,7 @@ import { Settings as SettingsIcon, Save, RotateCcw, DollarSign, Gamepad2, Shield
 import { adminSupabase } from "../../lib/adminSupabase";
 
 const DEFAULTS = {
-  platformName: "WinWave",
+  platformName: "WinClub",
   maintenanceMode: false,
   minWithdrawal: 1000,
   maxWithdrawal: 500000,
@@ -104,28 +104,29 @@ export function Settings() {
 
   useEffect(() => {
     const load = async () => {
-      const { data, error: e } = await adminSupabase
+      const { data, error: e } = await (adminSupabase as any)
         .from("platform_settings")
         .select("*")
         .eq("id", "default")
         .maybeSingle();
 
       if (!e && data) {
+        const settingsData = (data as any) ?? {};
         set({
-          platformName: data.platform_name ?? DEFAULTS.platformName,
-          maintenanceMode: Boolean(data.maintenance_mode ?? DEFAULTS.maintenanceMode),
-          minWithdrawal: Number(data.min_withdrawal ?? DEFAULTS.minWithdrawal),
-          maxWithdrawal: Number(data.max_withdrawal ?? DEFAULTS.maxWithdrawal),
-          withdrawalFee: Number(data.withdrawal_fee ?? DEFAULTS.withdrawalFee),
-          depositBonus: Number(data.deposit_bonus ?? DEFAULTS.depositBonus),
-          referralCommission: Number(data.referral_commission ?? DEFAULTS.referralCommission),
-          maxBetPerRound: Number(data.max_bet_per_round ?? DEFAULTS.maxBetPerRound),
-          minBetPerRound: Number(data.min_bet_per_round ?? DEFAULTS.minBetPerRound),
-          platformMarginTarget: Number(data.platform_margin_target ?? DEFAULTS.platformMarginTarget),
-          gameControlEnabled: Boolean(data.game_control_enabled ?? DEFAULTS.gameControlEnabled),
-          smartRiskDefault: Boolean(data.smart_risk_default ?? DEFAULTS.smartRiskDefault),
-          notificationsEnabled: Boolean(data.notifications_enabled ?? DEFAULTS.notificationsEnabled),
-          autoApproveDeposit: Boolean(data.auto_approve_deposit ?? DEFAULTS.autoApproveDeposit),
+          platformName: settingsData.platform_name ?? DEFAULTS.platformName,
+          maintenanceMode: Boolean(settingsData.maintenance_mode ?? DEFAULTS.maintenanceMode),
+          minWithdrawal: Number(settingsData.min_withdrawal ?? DEFAULTS.minWithdrawal),
+          maxWithdrawal: Number(settingsData.max_withdrawal ?? DEFAULTS.maxWithdrawal),
+          withdrawalFee: Number(settingsData.withdrawal_fee ?? DEFAULTS.withdrawalFee),
+          depositBonus: Number(settingsData.deposit_bonus ?? DEFAULTS.depositBonus),
+          referralCommission: Number(settingsData.referral_commission ?? DEFAULTS.referralCommission),
+          maxBetPerRound: Number(settingsData.max_bet_per_round ?? DEFAULTS.maxBetPerRound),
+          minBetPerRound: Number(settingsData.min_bet_per_round ?? DEFAULTS.minBetPerRound),
+          platformMarginTarget: Number(settingsData.platform_margin_target ?? DEFAULTS.platformMarginTarget),
+          gameControlEnabled: Boolean(settingsData.game_control_enabled ?? DEFAULTS.gameControlEnabled),
+          smartRiskDefault: Boolean(settingsData.smart_risk_default ?? DEFAULTS.smartRiskDefault),
+          notificationsEnabled: Boolean(settingsData.notifications_enabled ?? DEFAULTS.notificationsEnabled),
+          autoApproveDeposit: Boolean(settingsData.auto_approve_deposit ?? DEFAULTS.autoApproveDeposit),
         });
       }
       setLoading(false);
@@ -137,7 +138,7 @@ export function Settings() {
     setError(null);
     setSaving(true);
     try {
-      const { error: e } = await adminSupabase.from("platform_settings").upsert(
+      const { error: e } = await (adminSupabase as any).from("platform_settings").upsert(
         {
           id: "default",
           platform_name: settings.platformName,

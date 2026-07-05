@@ -54,8 +54,8 @@ export function GamePage({ gameType, gameTitle, gameDescription }: GamePageProps
         .from("game_rounds")
         .select("id,period,mode,started_at,ends_at,result_number,result_size,result_color,target_result,total_big,total_small,status")
         .eq("game_type", gameType)
-        .order("started_at", { ascending: false })
-        .limit(10);
+        .order("ends_at", { ascending: false })
+        .limit(100);
       if (e) throw e;
       setRecentRounds(data || []);
     } catch (e: any) {

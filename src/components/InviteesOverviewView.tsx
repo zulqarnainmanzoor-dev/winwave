@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ChevronLeft, Search, Calendar, ChevronDown, X, AlertCircle } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
+import { adminSupabase } from "../lib/adminSupabase";
 import { useUser } from "../context/UserContext";
 
 interface SubStats {
@@ -21,6 +22,11 @@ interface InviteeRow {
   account_status: string | null;
   created_at: string;
   referred_by: string | null;
+  main_balance?: number | null;
+  game_balance?: number | null;
+  total_deposit?: number | null;
+  total_withdrawal?: number | null;
+  vip_level?: number | null;
 }
 
 interface SubordinateRow {
@@ -60,10 +66,6 @@ function getDateRange(opt: string): { from: string; to: string } | null {
 
 export default function InviteesOverviewView({ onBack }: { onBack: () => void }) {
   const { uid } = useUser();
-  
-  // DEBUG: Log uid on every render
-  console.log('🔍 [InviteesOverview] Component render - uid:', uid, 'type:', typeof uid, 'length:', uid?.length);
-  
   const [activeTab, setActiveTab]           = useState<"subordinate" | "invitees">("subordinate");
   const [searchId, setSearchId]             = useState("");
   const [selectedDate, setSelectedDate]     = useState("All");
@@ -72,338 +74,105 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
   const [showLevelDrop, setShowLevelDrop]   = useState(false);
   const [stats, setStats]                   = useState<SubStats | null>(null);
   const [invitees, setInvitees]             = useState<InviteeRow[]>([]);
-  const [directIds, setDirectIds]           = useState<string[]>([]);
   const [loading, setLoading]               = useState(false);
   const [actionMsg, setActionMsg]           = useState<string | null>(null);
   const [subordinates, setSubordinates]     = useState<SubordinateRow[]>([]);
   const [subordinatesLoading, setSubordinatesLoading] = useState(false);
-  
-  const effectiveUid = uid;
 
   // ── Fetch subordinate stats ──────────────────────────────────────
   const fetchStats = useCallback(async () => {
-    if (!effectiveUid) {
-      console.warn('⚠️ [InviteesOverview] No effectiveUid available, skipping fetchStats');
-      return;
-    }
+    if (!uid) return;
     setLoading(true);
+    try {
+      const { data: rows, error } = await adminSupabase
+        .from('users')
+        .select('id, total_deposit, total_bets')
+        .eq('referred_by', uid);
 
-    console.log('📊 [InviteesOverview] Fetching stats for effectiveUid:', effectiveUid);
+      if (error) throw error;
 
-    // Build level filter: collect IDs at requested depth (Team A-G corresponds to Level 0-6)
-    const { data: l1 } = await supabase.from("users").select("id").eq("referred_by", effectiveUid);
-    const l1ids = (l1 ?? []).map((r: any) => r.id as string);
+      const r = (rows || []) as Array<{ id: string; total_deposit: number | null; total_bets: number | null }>;
+      const depositUsers  = r.filter(u => Number(u.total_deposit || 0) > 0).length;
+      const totalDeposits = r.reduce((s, u) => s + Number(u.total_deposit || 0), 0);
+      const totalBets     = r.reduce((s, u) => s + Number(u.total_bets || 0), 0);
 
-    let targetIds: string[] = [];
-    let currentLevelIds = l1ids;
-    
-    // Team A = Level 1 (direct referrals)
-    if (selectedLevel === "All" || selectedLevel === "Team A") targetIds.push(...l1ids);
-
-    // Team B = Level 2
-    if ((selectedLevel === "All" || selectedLevel === "Team B") && l1ids.length) {
-      const { data: l2 } = await supabase.from("users").select("id").in("referred_by", l1ids);
-      const l2ids = (l2 ?? []).map((r: any) => r.id as string);
-      targetIds.push(...l2ids);
-      currentLevelIds = l2ids;
-    }
-
-    // Team C = Level 3
-    if ((selectedLevel === "All" || selectedLevel === "Team C") && currentLevelIds.length) {
-      const { data: l3 } = await supabase.from("users").select("id").in("referred_by", currentLevelIds);
-      const l3ids = (l3 ?? []).map((r: any) => r.id as string);
-      targetIds.push(...l3ids);
-      currentLevelIds = l3ids;
-    }
-
-    // Team D = Level 4
-    if ((selectedLevel === "All" || selectedLevel === "Team D") && currentLevelIds.length) {
-      const { data: l4 } = await supabase.from("users").select("id").in("referred_by", currentLevelIds);
-      const l4ids = (l4 ?? []).map((r: any) => r.id as string);
-      targetIds.push(...l4ids);
-      currentLevelIds = l4ids;
-    }
-
-    // Team E = Level 5
-    if ((selectedLevel === "All" || selectedLevel === "Team E") && currentLevelIds.length) {
-      const { data: l5 } = await supabase.from("users").select("id").in("referred_by", currentLevelIds);
-      const l5ids = (l5 ?? []).map((r: any) => r.id as string);
-      targetIds.push(...l5ids);
-      currentLevelIds = l5ids;
-    }
-
-    // Team F = Level 6
-    if ((selectedLevel === "All" || selectedLevel === "Team F") && currentLevelIds.length) {
-      const { data: l6 } = await supabase.from("users").select("id").in("referred_by", currentLevelIds);
-      const l6ids = (l6 ?? []).map((r: any) => r.id as string);
-      targetIds.push(...l6ids);
-      currentLevelIds = l6ids;
-    }
-
-    // Team G = Level 7
-    if ((selectedLevel === "All" || selectedLevel === "Team G") && currentLevelIds.length) {
-      const { data: l7 } = await supabase.from("users").select("id").in("referred_by", currentLevelIds);
-      const l7ids = (l7 ?? []).map((r: any) => r.id as string);
-      targetIds.push(...l7ids);
-    }
-
-    if (!targetIds.length) {
+      setStats({
+        deposit_count:        r.length,
+        deposit_amount:       totalDeposits,
+        total_bet:            totalBets,
+        bettor_count:         depositUsers,
+        first_deposit_count:  depositUsers,
+        first_deposit_amount: totalDeposits,
+      });
+    } catch (err) {
+      console.error('[InviteesOverview] fetchStats failed:', err);
       setStats({ deposit_count: 0, deposit_amount: 0, total_bet: 0, bettor_count: 0, first_deposit_count: 0, first_deposit_amount: 0 });
+    } finally {
       setLoading(false);
-      return;
     }
+  }, [uid]);
 
-    const dateRange = getDateRange(selectedDate);
-
-    // Deposit stats
-    let depQ = (supabase as any).from("deposit_history").select("user_id, amount, status").in("user_id", targetIds);
-    if (dateRange) depQ = depQ.gte("created_at", dateRange.from).lt("created_at", dateRange.to);
-    const { data: deps } = await depQ;
-
-    const depRows = (deps ?? []).filter((d: any) =>
-      ['success', 'completed', 'approved', 'done'].includes(String(d?.status || '').toLowerCase())
-    );
-    const uniqueDepositors = new Set(depRows.map((d: any) => d.user_id));
-    const depAmount = depRows.reduce((s: number, d: any) => s + Number(d.amount), 0);
-
-    // First deposit per user
-    const firstDepMap: Record<string, number> = {};
-    for (const d of depRows) {
-      if (!firstDepMap[d.user_id]) firstDepMap[d.user_id] = Number(d.amount);
-    }
-    const firstDepCount  = Object.keys(firstDepMap).length;
-    const firstDepAmount = Object.values(firstDepMap).reduce((s, v) => s + v, 0);
-
-    // Bet stats
-    let betQ = (supabase as any).from("betting_history").select("user_id, amount").in("user_id", targetIds);
-    if (dateRange) betQ = betQ.gte("created_at", dateRange.from).lt("created_at", dateRange.to);
-    const { data: bets } = await betQ;
-
-    const betRows = bets ?? [];
-    const uniqueBettors = new Set(betRows.map((b: any) => b.user_id));
-    const totalBet = betRows.reduce((s: number, b: any) => s + Number(b.amount), 0);
-
-    setStats({
-      deposit_count:        uniqueDepositors.size,
-      deposit_amount:       depAmount,
-      total_bet:            totalBet,
-      bettor_count:         uniqueBettors.size,
-      first_deposit_count:  firstDepCount,
-      first_deposit_amount: firstDepAmount,
-    });
-    setLoading(false);
-  }, [uid, selectedDate, selectedLevel]);
-
-  // ── Fetch invitees list ──────────────────────────────────────────
+  // ── Fetch invitees list (Invitees tab) ───────────────────────────
   const fetchInvitees = useCallback(async () => {
-    if (!effectiveUid) {
-      console.warn('⚠️ [InviteesOverview] No effectiveUid available, skipping fetchInvitees');
-      return;
-    }
-    
-    console.log('🔍 [InviteesOverview] Fetching invitees for effectiveUid:', effectiveUid);
-    console.log('🔍 [InviteesOverview] Search term:', searchId.trim());
-    
-    // Always fetch direct invitees separately (independent of search)
-    console.log('🔍 [InviteesOverview] Fetching DIRECT invitees for effectiveUid:', effectiveUid);
-    const { data: directInvitees, error: directError } = await supabase
-      .from("users")
-      .select("id, phone_number, referral_code, invite_code, total_bets, created_at, referred_by")
-      .eq('referred_by', effectiveUid)
-      .order("created_at", { ascending: false });
-    
-    if (directError) {
-      console.error('❌ [InviteesOverview] Error fetching direct invitees:', directError);
-    }
-    
-    console.log('🔍 [InviteesOverview] Direct invitees found:', directInvitees?.length || 0);
-    
-    // If searching, perform separate searches for each field
-    let searchResults: any[] = [];
-    if (searchId.trim()) {
-      const searchTerm = searchId.trim();
-      console.log('🔍 [InviteesOverview] Executing search query for:', searchTerm);
-      
-      // Normalize search term for UID matching
-      const normalizedSearch = searchTerm.replace(/-/g, '').toUpperCase();
-      
-      try {
-        // Search 1: Match by id (exact or partial)
-        const { data: idMatches, error: idError } = await supabase
-          .from("users")
-          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
-          .ilike('id', `%${searchTerm}%`);
-        
-        if (idError) throw idError;
-        console.log('🔍 [InviteesOverview] ID matches:', idMatches?.length || 0);
-        
-        // Search 2: Match by referral_code
-        const { data: codeMatches, error: codeError } = await supabase
-          .from("users")
-          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
-          .ilike('referral_code', `%${searchTerm}%`);
-        
-        if (codeError) throw codeError;
-        console.log('🔍 [InviteesOverview] Code matches:', codeMatches?.length || 0);
-        
-        // Search 3: Match by phone_number
-        const { data: phoneMatches, error: phoneError } = await supabase
-          .from("users")
-          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
-          .ilike('phone_number', `%${searchTerm}%`);
-        
-        if (phoneError) throw phoneError;
-        console.log('🔍 [InviteesOverview] Phone matches:', phoneMatches?.length || 0);
-        
-        // Search 4: Match by referred_by (normalized)
-        const { data: referredMatches, error: referredError } = await supabase
-          .from("users")
-          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
-          .ilike('referred_by', `%${normalizedSearch}%`);
-        
-        if (referredError) throw referredError;
-        console.log('🔍 [InviteesOverview] Referred_by matches:', referredMatches?.length || 0);
-        
-        // Merge all results and remove duplicates
-        const allMatches = [
-          ...(idMatches || []),
-          ...(codeMatches || []),
-          ...(phoneMatches || []),
-          ...(referredMatches || [])
-        ];
-        
-        // Remove duplicates by id
-        const uniqueMatches = Array.from(
-          new Map(allMatches.map((item: any) => [item.id, item])).values()
-        );
-        
-        searchResults = uniqueMatches;
-        console.log('🔍 [InviteesOverview] Total unique search results:', searchResults.length);
-        
-      } catch (err: any) {
-        console.error('❌ [InviteesOverview] Search error:', err);
-        console.error('❌ [InviteesOverview] Error details:', err.message);
-        // Fallback to direct invitees on error
-        searchResults = directInvitees || [];
+    if (!uid) return;
+    try {
+      let query = adminSupabase
+        .from('users')
+        .select('id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by, main_balance, game_balance, total_deposit, total_withdrawal, vip_level')
+        .eq('referred_by', uid)
+        .order('created_at', { ascending: false });
+
+      if (searchId.trim()) {
+        query = query.ilike('phone_number', `%${searchId.trim()}%`);
       }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setInvitees((data || []) as InviteeRow[]);
+    } catch (err) {
+      console.error('[InviteesOverview] fetchInvitees failed:', err);
+      setInvitees([]);
     }
-    
-    // Use search results if searching, otherwise use direct invitees
-    const finalInvitees = searchId.trim() ? searchResults : (directInvitees || []);
-    
-    console.log('🔍 [InviteesOverview] Final results:', finalInvitees.length);
-    console.log('🔍 [InviteesOverview] First 5 results:', finalInvitees.slice(0, 5));
-    
-    // Get direct IDs for member type classification
-    const directIdsList = (finalInvitees ?? []).filter((u: any) => u.referred_by === uid).map((u: any) => u.id);
-    setDirectIds(directIdsList);
-    
-    setInvitees((finalInvitees ?? []) as InviteeRow[]);
-    
-    console.log('🔍 [InviteesOverview] Total invitees set:', (finalInvitees ?? []).length);
   }, [uid, searchId]);
 
-  // ── Fetch subordinates list ──────────────────────────────────────
+  // ── Fetch subordinates list (Subordinate tab) ────────────────────
   const fetchSubordinates = useCallback(async () => {
-    if (!effectiveUid) {
-      console.warn('⚠️ [InviteesOverview] No effectiveUid available, skipping fetchSubordinates');
-      return;
-    }
-    
+    if (!uid) return;
     setSubordinatesLoading(true);
-    console.log('🔍 [InviteesOverview] Fetching subordinates for effectiveUid:', effectiveUid);
-    console.log('🔍 [InviteesOverview] Search filter:', searchId.trim());
-    
     try {
-      // Step 1: Get all direct members (Level 1) - users referred by current user
-      const { data: directMembers, error: directError } = await supabase
-        .from("users")
-        .select("id, referral_code, invite_code, total_deposit, total_bets, created_at, phone_number, referred_by")
-        .eq("referred_by", effectiveUid);
-      
-      if (directError) throw directError;
-      
-      console.log('🔍 [InviteesOverview] Direct members found:', directMembers?.length || 0);
-      
-      // Step 2: Get all team members (Level 2) - users referred by direct members
-      const directMemberIds = (directMembers || []).map((m: any) => m.id);
-      let teamMembers: any[] = [];
-      
-      if (directMemberIds.length > 0) {
-        const { data: teamData, error: teamError } = await supabase
-          .from("users")
-          .select("id, referral_code, invite_code, total_deposit, total_bets, created_at, phone_number, referred_by")
-          .in("referred_by", directMemberIds);
-        
-        if (teamError) throw teamError;
-        teamMembers = teamData || [];
-        
-        console.log('🔍 [InviteesOverview] Team members found:', teamMembers.length);
-      }
-      
-      // Step 3: Combine and process all subordinates
-      const directMapped = (directMembers || []).map((m: any) => ({ ...m, level: 1 }));
-      const teamMapped = teamMembers.map((m: any) => ({ ...m, level: 2 }));
-      let allSubordinates = [
-        ...directMapped,
-        ...teamMapped
-      ];
-      
-      // Step 4: Filter by search UID if provided
+      let query = adminSupabase
+        .from('users')
+        .select('id, phone_number, created_at, referred_by, total_deposit, vip_level')
+        .eq('referred_by', uid)
+        .order('created_at', { ascending: false });
+
       if (searchId.trim()) {
-        const searchTerm = searchId.trim().toUpperCase();
-        console.log('🔍 [InviteesOverview] Filtering subordinates by search term:', searchTerm);
-        
-        allSubordinates = allSubordinates.filter((sub: any) => {
-          const codeMatch = (sub.referral_code || '').toUpperCase().includes(searchTerm);
-          const idMatch = sub.id.toUpperCase().includes(searchTerm);
-          return codeMatch || idMatch;
-        });
-        
-        console.log('🔍 [InviteesOverview] Filtered subordinates:', allSubordinates.length);
-      }
-      
-      const memberIds = allSubordinates.map((sub: any) => sub.id).filter(Boolean);
-      let commissionMap: Record<string, number> = {};
-      if (memberIds.length > 0) {
-        const { data: commissionRows, error: commissionError } = await supabase
-          .from("referral_commissions")
-          .select("inviter_id, amount")
-          .in("inviter_id", memberIds);
-
-        if (!commissionError) {
-          for (const row of commissionRows || []) {
-            commissionMap[row.inviter_id] = (commissionMap[row.inviter_id] || 0) + Number(row.amount || 0);
-          }
-        }
+        query = query.ilike('phone_number', `%${searchId.trim()}%`);
       }
 
-      // Step 5: Map to SubordinateRow format - use referral_code as uid
-      const mappedSubordinates: SubordinateRow[] = allSubordinates.map((sub: any) => ({
-        id: sub.id,
-        uid: sub.invite_code || sub.referral_code || sub.id.replace(/-/g, '').slice(0, 9),
-        level: sub.level,
+      const { data, error } = await query;
+      if (error) throw error;
+
+      setSubordinates((data || []).map((sub: any) => ({
+        id:             sub.id,
+        uid:            sub.id.replace(/-/g, '').slice(0, 9),
+        level:          Number(sub.vip_level || 0),
         deposit_amount: Number(sub.total_deposit || 0),
-        commission: commissionMap[sub.id] || 0,
-        created_at: sub.created_at,
-        phone_number: sub.phone_number
-      }));
-      
-      console.log('🔍 [InviteesOverview] Total subordinates set:', mappedSubordinates.length);
-      setSubordinates(mappedSubordinates);
-      
-    } catch (err: any) {
-      console.error('❌ [InviteesOverview] Error fetching subordinates:', err);
-      console.error('❌ [InviteesOverview] Error details:', err.message);
+        commission:     0,
+        created_at:     sub.created_at,
+        phone_number:   sub.phone_number,
+      })));
+    } catch (err) {
+      console.error('[InviteesOverview] fetchSubordinates failed:', err);
       setSubordinates([]);
     } finally {
       setSubordinatesLoading(false);
     }
   }, [uid, searchId]);
 
-  useEffect(() => { void fetchStats(); },   [fetchStats, effectiveUid]);
-  useEffect(() => { void fetchInvitees(); }, [fetchInvitees, effectiveUid]);
-  useEffect(() => { void fetchSubordinates(); }, [fetchSubordinates, effectiveUid]);
+  useEffect(() => { void fetchStats(); },        [fetchStats]);
+  useEffect(() => { void fetchInvitees(); },     [fetchInvitees]);
+  useEffect(() => { void fetchSubordinates(); }, [fetchSubordinates]);
 
   const handleAccountAction = async (userId: string, action: "suspended" | "banned") => {
     const { error } = await (supabase as any).from("users").update({ account_status: action }).eq("id", userId);
@@ -413,7 +182,6 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
     void fetchInvitees();
   };
 
-  const maskPhone = (p: string | null) => p ? p.slice(0, 4) + "****" + p.slice(-2) : "---";
   const fmt = (n: number) => `Rs ${n.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
@@ -528,7 +296,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                   Subordinates List ({subordinates.length})
                 </h3>
               </div>
-              
+
               {subordinatesLoading ? (
                 <div className="flex justify-center py-10">
                   <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
@@ -540,7 +308,6 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                 </div>
               ) : (
                 <div className="divide-y divide-white/5">
-                  {/* Table Header */}
                   <div className="grid grid-cols-5 bg-[#252528] p-2.5 text-[10px] font-black uppercase text-gray-400 tracking-wider">
                     <span className="text-center">UID</span>
                     <span className="text-center">Level</span>
@@ -548,8 +315,6 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                     <span className="text-center">Commission</span>
                     <span className="text-center">Time</span>
                   </div>
-                  
-                  {/* Table Rows */}
                   {subordinates.map((sub) => (
                     <div key={sub.id} className="grid grid-cols-5 p-3 text-xs text-center items-center hover:bg-white/[0.02] transition-colors">
                       <span className="font-mono text-white font-bold text-[11px]">{sub.uid}</span>
@@ -572,7 +337,6 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
         ) : (
           /* Invitees tab */
           <div className="space-y-4">
-            {/* Search */}
             <div className="relative">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
               <input type="text" placeholder="Search by phone number" value={searchId}
@@ -604,31 +368,59 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                 </p>
               </div>
             ) : (
-              <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden divide-y divide-white/5">
-                <div className="grid grid-cols-4 bg-[#2C2C2E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">
-                  <span>UID / Phone</span>
-                  <span>Reg. Date</span>
-                  <span>Member Type</span>
-                  <span>Status</span>
-                </div>
+              <div className="space-y-3">
                 {invitees.map((u: any) => {
-                  const memberType = u.referred_by === uid ? "Direct" : "Team";
                   const statusLabel = u.account_status === "banned" ? "Banned" : u.account_status === "suspended" ? "Suspended" : "Active";
                   const statusClass = u.account_status === "banned" ? "text-red-500" : u.account_status === "suspended" ? "text-yellow-500" : "text-green-400";
-                  const displayCode = u.invite_code || u.referral_code || "—";
+                  const shortUid = (u.id || "").replace(/-/g, "").slice(0, 8).toUpperCase();
+                  const deposit = Number(u.total_deposit || 0);
+                  const withdrawal = Number(u.total_withdrawal || 0);
+                  const mainBalance = Number(u.main_balance || 0);
+                  const gameBalance = Number(u.game_balance || 0);
+                  const vipLevel = Number(u.vip_level || 0);
+                  const registeredAt = u.created_at ? new Date(u.created_at) : null;
+                  const registeredText = registeredAt ? registeredAt.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true }) : "—";
                   return (
-                    <div key={u.id} className="grid grid-cols-4 p-3 text-xs text-center items-center gap-1">
-                      <div className="min-w-0">
-                        <div className="font-mono text-white font-bold truncate">{maskPhone(u.phone_number)}</div>
-                        <div className="text-[10px] text-gray-500 truncate">{displayCode}</div>
+                    <div key={u.id} className="rounded-3xl border border-white/5 bg-[#1C1C1E] p-4 shadow-[0_8px_16px_rgba(0,0,0,0.35)]">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">UID</div>
+                          <div className="text-sm font-black text-white">{shortUid}</div>
+                        </div>
+                        <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${statusClass}`}>
+                          {statusLabel}
+                        </div>
                       </div>
-                      <span className="text-gray-400 text-[10px]">{new Date(u.created_at).toLocaleDateString()}</span>
-                      <span className={`text-[10px] font-black uppercase ${memberType === "Direct" ? "text-[#ffa502]" : "text-green-400"}`}>
-                        {memberType}
-                      </span>
-                      <span className={`text-[10px] font-black uppercase ${statusClass}`}>
-                        {statusLabel}
-                      </span>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-gray-300">
+                        <div className="rounded-2xl bg-black/20 p-2">
+                          <div className="text-[10px] uppercase text-gray-500">Phone</div>
+                          <div className="mt-1 font-semibold text-white">{u.phone_number || "—"}</div>
+                        </div>
+                        <div className="rounded-2xl bg-black/20 p-2">
+                          <div className="text-[10px] uppercase text-gray-500">Registered</div>
+                          <div className="mt-1 font-semibold text-white">{registeredText}</div>
+                        </div>
+                        <div className="rounded-2xl bg-black/20 p-2">
+                          <div className="text-[10px] uppercase text-gray-500">Deposit</div>
+                          <div className="mt-1 font-semibold text-white">{deposit.toFixed(2)}</div>
+                        </div>
+                        <div className="rounded-2xl bg-black/20 p-2">
+                          <div className="text-[10px] uppercase text-gray-500">Withdraw</div>
+                          <div className="mt-1 font-semibold text-white">{withdrawal.toFixed(2)}</div>
+                        </div>
+                        <div className="rounded-2xl bg-black/20 p-2">
+                          <div className="text-[10px] uppercase text-gray-500">Main Balance</div>
+                          <div className="mt-1 font-semibold text-white">{mainBalance.toFixed(2)}</div>
+                        </div>
+                        <div className="rounded-2xl bg-black/20 p-2">
+                          <div className="text-[10px] uppercase text-gray-500">Game Balance</div>
+                          <div className="mt-1 font-semibold text-white">{gameBalance.toFixed(2)}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between text-[11px] text-gray-400">
+                        <span>VIP Level: {vipLevel}</span>
+                        <span>Direct</span>
+                      </div>
                     </div>
                   );
                 })}

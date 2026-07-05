@@ -368,7 +368,13 @@ const App: React.FC = () => {
                           }} />
                           <WinningInfo />
                           <GameCategories />
-                          <HomeContent onWinGoClick={() => setCurrentView('wingo')} />
+                          <HomeContent
+                            onWinGoClick={() => setCurrentView('wingo')}
+                            onDepositClick={() => {
+                              setPreviousView(currentView);
+                              setCurrentView('deposit');
+                            }}
+                          />
                         </>
                       ) : currentView === 'wingo' ? (
                         <WinGoView 
@@ -408,7 +414,13 @@ const App: React.FC = () => {
                           }} />
                           <WinningInfo />
                           <GameCategories />
-                          <HomeContent onWinGoClick={() => setCurrentView('wingo')} />
+                          <HomeContent
+                            onWinGoClick={() => setCurrentView('wingo')}
+                            onDepositClick={() => {
+                              setPreviousView(currentView);
+                              setCurrentView('deposit');
+                            }}
+                          />
                         </>
                       )}
                     </div>

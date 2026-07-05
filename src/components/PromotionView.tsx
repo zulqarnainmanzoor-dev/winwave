@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { adminSupabase } from "../lib/adminSupabase";
 import {
   Users,
   Copy,
@@ -27,7 +28,6 @@ import CommissionDetailsView from "./CommissionDetailsView";
 import InvitationRulesView from "./InvitationRulesView";
 import PartnerRewards from "./PartnerRewards";
 import AnimatedCounter from "./AnimatedCounter";
-
 export default function PromotionView() {
   const { t } = useLanguage();
   const navigate = useNavigate();
@@ -53,98 +53,122 @@ export default function PromotionView() {
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
 
-  // --- Fetch network stats using direct queries (replaces RPC) ---
+  // --- Fetch network stats using live users data ---
   useEffect(() => {
     if (!uid) return;
 
     const fetchStats = async () => {
       if (!uid) return;
+
+      // ── DEBUG BLOCK START ──
+      const { data: { session: authSession } } = await supabase.auth.getSession();
+      console.log('🔎 [PromotionView] DEBUG auth.user.id   :', authSession?.user?.id ?? 'NO SESSION');
+      console.log('🔎 [PromotionView] DEBUG uid from context:', uid);
+      console.log('🔎 [PromotionView] DEBUG referralCode    :', referralCode);
+      console.log('🔎 [PromotionView] DEBUG uid === auth.id :', uid === authSession?.user?.id);
+      console.log('🔎 [PromotionView] DEBUG QUERY: SELECT id,total_deposit FROM public.users WHERE referred_by =', uid);
+      // ── DEBUG BLOCK END ──
+
       setLoadingStats(true);
       setStatsError(null);
 
-      try {
-        const { data: directUsers, error: dErr } = await (supabase as any)
-          .from('users')
-          .select('id, total_deposit, created_at')
-          .eq('referred_by', uid);
+      const { data: invitees, error: inviteesError } = await adminSupabase
+        .from('users')
+        .select('id, total_deposit')
+        .eq('referred_by', uid);
 
-        if (dErr) {
-          throw dErr;
-        }
+      // ── DEBUG BLOCK START ──
+      console.log('🔎 [PromotionView] DEBUG direct invitees response:');
+      console.log('   data  :', JSON.stringify(invitees));
+      console.log('   count :', invitees?.length ?? 'null');
+      console.log('   error :', JSON.stringify(inviteesError));
+      // ── DEBUG BLOCK END ──
 
-        const directUserIds = (directUsers || []).map((u: any) => u.id).filter(Boolean);
-        const directCount = directUserIds.length;
-        const directDepositUsers = (directUsers || []).filter((u: any) => Number(u.total_deposit || 0) > 0).length;
-        const directDepositAmount = (directUsers || []).reduce((sum: number, u: any) => sum + Number(u.total_deposit || 0), 0);
-
-        let teamUsers: any[] = [];
-        if (directUserIds.length) {
-          const { data: teamData, error: tErr } = await (supabase as any)
-            .from('users')
-            .select('id, total_deposit, created_at')
-            .in('referred_by', directUserIds);
-
-          if (tErr) {
-            console.warn('❌ [PromotionView] Error fetching team users:', tErr);
-          } else {
-            teamUsers = teamData || [];
-          }
-        }
-
-        const teamCount = teamUsers.length;
-        const teamDepositUsers = teamUsers.filter((u) => Number(u.total_deposit || 0) > 0).length;
-        const teamDepositAmount = teamUsers.reduce((sum, u) => sum + Number(u.total_deposit || 0), 0);
-
-        setNetworkStats({
-          direct_count: directCount,
-          team_count: teamCount,
-          direct_deposit_users: directDepositUsers,
-          team_deposit_users: teamDepositUsers,
-          direct_deposit_amount: directDepositAmount,
-          team_deposit_amount: teamDepositAmount,
-        });
-
-        const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        const { data: weeklyRows, error: weeklyErr } = await (supabase as any)
-          .from('referral_commissions')
-          .select('amount, inviter_id')
-          .eq('inviter_id', uid)
-          .gte('created_at', oneWeekAgo.toISOString());
-
-        if (weeklyErr) {
-          throw weeklyErr;
-        }
-
-        const computedWeekly = (weeklyRows || []).reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0);
-        setWeeklyCommission(computedWeekly);
-
-        const { data: commissionRows, error: commissionErr } = await (supabase as any)
-          .from('referral_commissions')
-          .select('amount, inviter_id')
-          .eq('inviter_id', uid);
-
-        if (commissionErr) {
-          throw commissionErr;
-        }
-
-        const total = (commissionRows || []).reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0);
-        setTotalCommissions(total);
-      } catch (err: any) {
-        console.error('❌ [PromotionView] Failed to fetch network stats:', err);
-        setStatsError(err?.message || 'Unable to load referral stats.');
-        setNetworkStats({
-          direct_count: 0,
-          team_count: 0,
-          direct_deposit_users: 0,
-          team_deposit_users: 0,
-          direct_deposit_amount: 0,
-          team_deposit_amount: 0,
-        });
-        setWeeklyCommission(0);
-        setTotalCommissions(0);
-      } finally {
+      if (inviteesError) {
+        console.error('❌ [PromotionView] Direct invitees fetch failed:', inviteesError);
+        setStatsError(inviteesError.message || 'Unable to load referral stats.');
         setLoadingStats(false);
+        return;
       }
+
+      const directRows = (invitees || []) as Array<{ id: string; total_deposit: number | null }>;
+      const directCount        = directRows.length;
+      const directDepositUsers = directRows.filter(r => Number(r.total_deposit || 0) > 0).length;
+      const directDepositAmt   = directRows.reduce((s, r) => s + Number(r.total_deposit || 0), 0);
+
+      // ── Step 2: Team tree — recursively walk referred_by levels ──
+      // Each iteration:
+      //   SELECT id, total_deposit
+      //   FROM public.users
+      //   WHERE referred_by IN (<previous level ids>)
+      let teamCount        = 0;
+      let teamDepositUsers = 0;
+      let teamDepositAmt   = 0;
+      let currentLevelIds  = directRows.map(u => u.id);
+
+      while (currentLevelIds.length > 0) {
+        const { data: nextLevel } = await adminSupabase
+          .from('users')
+          .select('id, total_deposit')
+          .in('referred_by', currentLevelIds);
+        if (!nextLevel || nextLevel.length === 0) break;
+        teamCount        += nextLevel.length;
+        teamDepositUsers += nextLevel.filter((r: any) => Number(r.total_deposit || 0) > 0).length;
+        teamDepositAmt   += nextLevel.reduce((s: number, r: any) => s + Number(r.total_deposit || 0), 0);
+        currentLevelIds   = nextLevel.map((u: any) => u.id);
+      }
+
+      // ── DEBUG BLOCK START ──
+      console.log('🔎 [PromotionView] DEBUG setNetworkStats value:', {
+        direct_count: directCount,
+        team_count: teamCount,
+        direct_deposit_users: directDepositUsers,
+        team_deposit_users: teamDepositUsers,
+        direct_deposit_amount: directDepositAmt,
+        team_deposit_amount: teamDepositAmt,
+      });
+      // ── DEBUG BLOCK END ──
+
+      setNetworkStats({
+        direct_count:          directCount,
+        team_count:            teamCount,
+        direct_deposit_users:  directDepositUsers,
+        team_deposit_users:    teamDepositUsers,
+        direct_deposit_amount: directDepositAmt,
+        team_deposit_amount:   teamDepositAmt,
+      });
+
+      // ── Step 3: Commissions from public.transactions WHERE type='commission' ──
+      // The referral_commissions table does not exist in the schema.
+      // The trigger trg_credit_agent_commission inserts into public.transactions
+      // with type='commission' and user_id = referrer_id.
+      //
+      // Query (weekly):
+      //   SELECT amount FROM public.transactions
+      //   WHERE user_id = '<uid>' AND type = 'commission'
+      //     AND created_at >= '<7 days ago>'
+      //
+      // Query (total):
+      //   SELECT amount FROM public.transactions
+      //   WHERE user_id = '<uid>' AND type = 'commission'
+      const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: allCommRows } = await (supabase as any)
+        .from('transactions')
+        .select('amount, created_at')
+        .eq('user_id', uid)
+        .eq('type', 'commission');
+
+      const commRows = (allCommRows || []) as Array<{ amount: number; created_at: string }>;
+      const totalComm  = commRows.reduce((s, r) => s + Number(r.amount || 0), 0);
+      const weeklyComm = commRows
+        .filter(r => r.created_at >= oneWeekAgo)
+        .reduce((s, r) => s + Number(r.amount || 0), 0);
+
+      setTotalCommissions(totalComm);
+      setWeeklyCommission(weeklyComm);
+
+      setLoadingStats(false);
     };
 
     fetchStats();
@@ -203,7 +227,7 @@ export default function PromotionView() {
       return;
     }
 
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://winwave-official.vercel.app';
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://winclub-official.vercel.app';
     const inviteLink = `${origin}/#/register?ref=${encodeURIComponent(codeToShare)}`;
 
     try {
@@ -295,7 +319,7 @@ export default function PromotionView() {
       try {
         console.log('📊 [PromotionView] Fetching recent invitees for uid:', uid);
         
-        const { data, error } = await (supabase as any)
+        const { data, error } = await adminSupabase
           .from('users')
           .select('id, phone_number, created_at')
           .eq('referred_by', uid)
@@ -1037,7 +1061,7 @@ export default function PromotionView() {
 
               {activeModal === "gift_code" && (
                 <form onSubmit={handleGiftRedeem} className="space-y-4">
-                  <p className="text-xs text-gray-400">Enter your WinWave gift voucher or reward code below to claim instant cash prizes.</p>
+                  <p className="text-xs text-gray-400">Enter your WinClub gift voucher or reward code below to claim instant cash prizes.</p>
                   
                   <div className="space-y-2">
                     <input 
@@ -1047,7 +1071,7 @@ export default function PromotionView() {
                       onChange={(e) => setGiftCode(e.target.value)}
                       className="w-full bg-[#0A0A0B] border border-white/10 rounded-2xl px-4 py-3 text-center text-sm font-black text-white placeholder-gray-600 focus:outline-none focus:border-[#ffa502] font-mono tracking-wider uppercase"
                     />
-                    <p className="text-[10px] text-gray-500 font-bold text-center">Try redeeming with sample codes: <span className="text-[#ffa502]">GIFT777</span> or <span className="text-[#ffa502]">WINWAVE7</span></p>
+                    <p className="text-[10px] text-gray-500 font-bold text-center">Try redeeming with sample codes: <span className="text-[#ffa502]">GIFT777</span> or <span className="text-[#ffa502]">WINCLUB7</span></p>
                   </div>
 
                   {giftError && (

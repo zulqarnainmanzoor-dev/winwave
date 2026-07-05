@@ -13,6 +13,11 @@ interface ActiveRound {
   total_small: number;
   big_pct: number;
   small_pct: number;
+  // per-number and per-color totals (live from betting_history)
+  numberTotals: Record<number, number>;
+  colorTotals: { green: number; red: number; violet: number };
+  totalBets: number;
+  totalBetAmount: number;
 }
 
 interface GameControllerProps {
@@ -36,18 +41,14 @@ function getIntervalAndPrefix(mode: string) {
   }
 }
 
-function computeCurrentPeriod(mode: string) {
-  const { interval, prefix } = getIntervalAndPrefix(mode);
-  const now      = new Date();
-  const dateStr  = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-  const secs     = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-  const roundNum = Math.floor(secs / interval) + 1;
-  const timeLeft = interval - (secs % interval);
-  const period   = `${dateStr}${prefix}${String(roundNum).padStart(5, "0")}`;
-  return { period, timeLeft, roundNum, interval };
+function getCountdownFromEndsAt(endsAt: string | null): number {
+  if (!endsAt) return 0;
+  const diffMs = new Date(endsAt).getTime() - Date.now();
+  return Math.max(0, Math.ceil(diffMs / 1000));
 }
 
 export function GameController({ gameType }: GameControllerProps) {
+  const supabase = adminSupabase as any;
   const [selectedMode, setSelectedMode] = useState<"30s" | "1m" | "3m" | "5m">("30s");
   const [overrideLoading, setOverrideLoading] = useState(false);
   const [overrideMsg,     setOverrideMsg]     = useState<string | null>(null);
@@ -71,13 +72,13 @@ export function GameController({ gameType }: GameControllerProps) {
     setRoundLoading(true);
     setFetchErr(null);
     try {
-      const { data: rpcRows, error: rpcErr } = await adminSupabase
+      const { data: rpcRows, error: rpcErr } = await supabase
         .rpc("get_active_round", { p_game_type: gameType, p_mode: selectedMode });
 
       let row: any = rpcRows?.[0] ?? null;
 
       if (rpcErr || !row) {
-        const { data: tableRows, error: tableErr } = await adminSupabase
+        const { data: tableRows, error: tableErr } = await supabase
           .from("game_rounds")
           .select("id,period,mode,ends_at,status,target_result,total_big,total_small")
           .eq("game_type", gameType)
@@ -90,11 +91,43 @@ export function GameController({ gameType }: GameControllerProps) {
         row = tableRows?.[0] ?? null;
       }
 
-      if (!row) { setActiveRound(null); return; }
+      if (!row) {
+        setActiveRound(null);
+        setLivePeriod("");
+        setLiveCountdown(0);
+        return;
+      }
 
       const big   = Number(row.total_big   ?? 0);
       const small = Number(row.total_small ?? 0);
       const total = big + small;
+
+      // Fetch per-number and per-color totals from betting_history for this period
+      const { data: betRows } = await supabase
+        .from("betting_history")
+        .select("bet_type, bet_value, amount")
+        .eq("game_type", gameType)
+        .eq("period", row.period)
+        .eq("status", "pending");
+
+      const numberTotals: Record<number, number> = {};
+      for (let i = 0; i <= 9; i++) numberTotals[i] = 0;
+      const colorTotals = { green: 0, red: 0, violet: 0 };
+      let totalBets = 0;
+      let totalBetAmount = 0;
+
+      for (const bet of betRows ?? []) {
+        const amt = Number(bet.amount || 0);
+        totalBets++;
+        totalBetAmount += amt;
+        if (bet.bet_type === "number") {
+          const n = Number(bet.bet_value);
+          if (n >= 0 && n <= 9) numberTotals[n] = (numberTotals[n] || 0) + amt;
+        } else if (bet.bet_type === "color") {
+          const c = String(bet.bet_value).toLowerCase() as keyof typeof colorTotals;
+          if (c in colorTotals) colorTotals[c] += amt;
+        }
+      }
 
       setActiveRound({
         id:            row.id,
@@ -107,7 +140,13 @@ export function GameController({ gameType }: GameControllerProps) {
         total_small:   small,
         big_pct:       total > 0 ? Math.round((big   / total) * 100) : 50,
         small_pct:     total > 0 ? Math.round((small / total) * 100) : 50,
+        numberTotals,
+        colorTotals,
+        totalBets,
+        totalBetAmount,
       });
+      setLivePeriod(row.period ?? "");
+      setLiveCountdown(getCountdownFromEndsAt(row.ends_at));
     } catch (e: any) {
       setFetchErr(e?.message ?? "Unknown error fetching round.");
       setActiveRound(null);
@@ -119,30 +158,31 @@ export function GameController({ gameType }: GameControllerProps) {
   // ── Live countdown (defined after fetchActiveRound to avoid TDZ) ──────────
   useEffect(() => {
     const tick = () => {
-      const { period, timeLeft } = computeCurrentPeriod(selectedMode);
-      setLivePeriod(prev => {
-        if (prev !== period) void fetchActiveRound();
-        return period;
-      });
-      setLiveCountdown(timeLeft);
+      if (!activeRound?.ends_at) {
+        setLiveCountdown(0);
+        return;
+      }
+      const nextCountdown = getCountdownFromEndsAt(activeRound.ends_at);
+      setLiveCountdown(nextCountdown);
+      if (activeRound.period) setLivePeriod(activeRound.period);
     };
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [selectedMode, fetchActiveRound]);
+  }, [activeRound?.ends_at, activeRound?.period]);
 
   useEffect(() => {
     void fetchActiveRound();
     // Poll every 5s so stale rounds are caught quickly
     const interval = setInterval(() => void fetchActiveRound(), 5_000);
-    const channel = adminSupabase
+    const channel = supabase
       .channel(`gc-${gameType}-${selectedMode}`)
       .on("postgres_changes",
         { event: "*", schema: "public", table: "game_rounds", filter: `game_type=eq.${gameType}` },
         () => void fetchActiveRound()
       )
       .subscribe();
-    return () => { clearInterval(interval); void adminSupabase.removeChannel(channel); };
+    return () => { clearInterval(interval); void supabase.removeChannel(channel); };
   }, [gameType, selectedMode, fetchActiveRound]);
 
   // ── Seed rounds ───────────────────────────────────────────────────
@@ -150,7 +190,7 @@ export function GameController({ gameType }: GameControllerProps) {
     setSeeding(true);
     setFetchErr(null);
     try {
-      const { error } = await adminSupabase.rpc("fn_tick_game_rounds");
+      const { error } = await supabase.rpc("fn_tick_game_rounds");
       if (error) await seedRoundDirect();
       else await fetchActiveRound();
     } catch { await seedRoundDirect(); }
@@ -158,21 +198,7 @@ export function GameController({ gameType }: GameControllerProps) {
   };
 
   const seedRoundDirect = async () => {
-    const { period, interval } = computeCurrentPeriod(selectedMode);
-    const now      = new Date();
-    const secs     = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-    const timeLeft = interval - (secs % interval);
-    const endsAt   = new Date(Date.now() + timeLeft * 1000).toISOString();
-
-    await adminSupabase.from("game_rounds")
-      .update({ status: "completed" })
-      .eq("game_type", gameType).eq("mode", selectedMode)
-      .eq("status", "active").neq("period", period);
-
-    const { error } = await adminSupabase.from("game_rounds")
-      .upsert({ game_type: gameType, mode: selectedMode, period, ends_at: endsAt, status: "active" },
-               { onConflict: "period" });
-
+    const { error } = await supabase.rpc("fn_tick_game_rounds");
     if (error) setFetchErr(`Seed failed: ${error.message}`);
     else await fetchActiveRound();
   };
@@ -180,15 +206,11 @@ export function GameController({ gameType }: GameControllerProps) {
   // ── Core: write target_result to DB ──────────────────────────────
   const applyTargetResult = async (target: string): Promise<boolean> => {
     if (!activeRound) { setOverrideErr("No active round. Click 'Seed Rounds' first."); return false; }
-    // Guard: only write to the round that matches the live period
-    if (activeRound.period !== livePeriod) {
-      setOverrideErr(`DB period (${activeRound.period}) doesn't match live period (${livePeriod}). Click Seed Rounds.`);
-      return false;
-    }
+    // Use the current DB active round as the authoritative period.
     setOverrideLoading(true);
     setOverrideErr(null);
     try {
-      const { error } = await adminSupabase
+      const { error } = await supabase
         .from("game_rounds")
         .update({ target_result: target })
         .eq("id", activeRound.id)
@@ -214,7 +236,7 @@ export function GameController({ gameType }: GameControllerProps) {
     if (!activeRound) return;
     setOverrideLoading(true);
     try {
-      await adminSupabase.from("game_rounds")
+      await supabase.from("game_rounds")
         .update({ target_result: null }).eq("id", activeRound.id);
       setOverrideMsg("Force cleared.");
       void fetchActiveRound();
@@ -451,6 +473,86 @@ export function GameController({ gameType }: GameControllerProps) {
           </div>
         )}
       </div>
+
+      {/* ── Number Picker ─────────────────────────────────────── */}
+      <div className="mb-6">
+        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">Force Specific Number (0–9)</h3>
+        <div className="grid grid-cols-5 gap-2">
+          {[0,1,2,3,4,5,6,7,8,9].map((n) => (
+            <button key={n}
+              onClick={() => applyTargetResult(`NUM:${n}`)}
+              disabled={overrideLoading || !activeRound}
+              className="py-2.5 rounded-lg font-black text-sm border border-[#1a5f7a] bg-[#0f3460] text-white hover:border-purple-400 hover:bg-purple-500/20 disabled:opacity-40 transition-all">
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Live Analytics ───────────────────────────────────────── */}
+      {activeRound && (
+        <div className="mb-6 bg-[#0a0f1e] rounded-xl border border-[#1a5f7a] p-5">
+          <h3 className="text-white font-bold text-base mb-4">Live Bet Analytics</h3>
+
+          {/* Summary row */}
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="bg-[#111827] rounded-lg p-3">
+              <p className="text-gray-500 text-[10px] uppercase tracking-wider mb-0.5">Total Bets</p>
+              <p className="text-white font-black text-xl">{activeRound.totalBets}</p>
+            </div>
+            <div className="bg-[#111827] rounded-lg p-3">
+              <p className="text-gray-500 text-[10px] uppercase tracking-wider mb-0.5">Total Amount</p>
+              <p className="text-white font-black text-xl">Rs {activeRound.totalBetAmount.toLocaleString()}</p>
+            </div>
+            <div className="bg-[#111827] rounded-lg p-3">
+              <p className="text-[10px] text-[#fba846] uppercase tracking-wider mb-0.5">Big Amount</p>
+              <p className="text-[#fba846] font-black">Rs {activeRound.total_big.toLocaleString()}</p>
+            </div>
+            <div className="bg-[#111827] rounded-lg p-3">
+              <p className="text-[10px] text-[#5c9df5] uppercase tracking-wider mb-0.5">Small Amount</p>
+              <p className="text-[#5c9df5] font-black">Rs {activeRound.total_small.toLocaleString()}</p>
+            </div>
+          </div>
+
+          {/* Number-wise totals */}
+          <p className="text-gray-500 text-[10px] uppercase tracking-wider mb-2">Number-wise Bet Amounts</p>
+          <div className="grid grid-cols-5 gap-1.5 mb-4">
+            {[0,1,2,3,4,5,6,7,8,9].map((n) => (
+              <div key={n} className="bg-[#111827] rounded-lg p-2 text-center">
+                <p className="text-gray-400 text-[10px] font-bold">{n}</p>
+                <p className="text-white text-xs font-black">
+                  {activeRound.numberTotals[n] > 0
+                    ? `Rs ${activeRound.numberTotals[n].toLocaleString()}`
+                    : "—"}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Color-wise totals */}
+          <p className="text-gray-500 text-[10px] uppercase tracking-wider mb-2">Color-wise Bet Amounts</p>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-[#111827] rounded-lg p-3 text-center border border-[#2ed573]/20">
+              <p className="text-[#2ed573] text-[10px] font-bold uppercase mb-1">Green</p>
+              <p className="text-white font-black text-sm">
+                {activeRound.colorTotals.green > 0 ? `Rs ${activeRound.colorTotals.green.toLocaleString()}` : "—"}
+              </p>
+            </div>
+            <div className="bg-[#111827] rounded-lg p-3 text-center border border-[#ff4757]/20">
+              <p className="text-[#ff4757] text-[10px] font-bold uppercase mb-1">Red</p>
+              <p className="text-white font-black text-sm">
+                {activeRound.colorTotals.red > 0 ? `Rs ${activeRound.colorTotals.red.toLocaleString()}` : "—"}
+              </p>
+            </div>
+            <div className="bg-[#111827] rounded-lg p-3 text-center border border-[#9c27b0]/20">
+              <p className="text-[#9c27b0] text-[10px] font-bold uppercase mb-1">Violet</p>
+              <p className="text-white font-black text-sm">
+                {activeRound.colorTotals.violet > 0 ? `Rs ${activeRound.colorTotals.violet.toLocaleString()}` : "—"}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Result Command Box ────────────────────────────────────── */}
       <div className="bg-[#0a0f1e] rounded-xl border border-[#1a5f7a] overflow-hidden">

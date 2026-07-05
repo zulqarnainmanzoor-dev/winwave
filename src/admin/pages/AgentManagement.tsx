@@ -104,8 +104,9 @@ export function AgentManagement() {
     try {
       const trimmed = agentUID.trim();
       const isUUID       = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
-      const isPhone      = /^\d{10,11}$/.test(trimmed);
-      const isInviteCode = /^\d{6}$/.test(trimmed);
+      const isPhone      = /^\d{10,15}$/.test(trimmed);
+      // invite_code can be 6-12 alphanumeric chars (e.g. "329554612" is 9 digits)
+      const isInviteCode = /^[a-zA-Z0-9]{4,12}$/.test(trimmed) && !isUUID && !isPhone;
 
       let q = (adminSupabase as any)
         .from("users")

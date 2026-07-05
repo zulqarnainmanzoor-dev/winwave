@@ -171,8 +171,10 @@ export default function ActivityView() {
   return (
     <div className="flex-1 flex flex-col bg-[#1A1A1D] animate-slide-up pb-[100px] overflow-y-auto relative z-10">
       <div className="p-4 bg-[#121214] border-b border-white/5 sticky top-0 z-20">
-        <h2 className="text-white font-bold text-xl mb-1">{t('activity')}</h2>
-        <p className="text-white/80 text-[11px]">{t('activitySubtitle1')}</p>
+        <div className="flex flex-col items-center text-center">
+          <h2 className="text-orange-500 font-bold text-xl tracking-[0.2em] font-mono">Activity</h2>
+          <p className="text-white font-bold text-[11px] tracking-[0.15em] font-mono">Please remember to follow the event page</p>
+        </div>
       </div>
 
       <div className="p-4">
@@ -198,13 +200,6 @@ export default function ActivityView() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 mb-4">
-          {["/assets/banners/Winwave Code Bonus.jpeg","/assets/banners/Join Win wave as an Agent.jpeg","/assets/banners/scam Alert.jpeg","/assets/banners/VIP Rebate Bonus.jpeg"].map((src, i) => (
-            <div key={i} className="h-40 rounded-3xl overflow-hidden border border-white/10 shadow-xl bg-[#111827]">
-              <img src={src} alt="" className="w-full h-full object-cover" onError={e => e.currentTarget.style.display='none'} />
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Attendance Modal */}

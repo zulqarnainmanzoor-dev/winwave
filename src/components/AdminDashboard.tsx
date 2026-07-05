@@ -18,9 +18,9 @@ interface MemberRecord {
 }
 
 const initialMembers: MemberRecord[] = [
-  { uid: 'B9G8812X', phone: '03123456789', email: '03123456789@winwave.com', status: 'Active', ip: '103.45.12.87', device: 'Samsung A52', balance: 1200, wins: 18, losses: 6 },
-  { uid: 'B9G8812Y', phone: '03229876543', email: '03229876543@winwave.com', status: 'Inactive', ip: '194.35.88.12', device: 'iPhone 12', balance: 470, wins: 10, losses: 8 },
-  { uid: 'B9G8812Z', phone: '03011223344', email: '03011223344@winwave.com', status: 'Active', ip: '103.45.12.234', device: 'Vivo Y21', balance: 3050, wins: 34, losses: 12 },
+  { uid: 'B9G8812X', phone: '03123456789', email: '03123456789@winclub.com', status: 'Active', ip: '103.45.12.87', device: 'Samsung A52', balance: 1200, wins: 18, losses: 6 },
+  { uid: 'B9G8812Y', phone: '03229876543', email: '03229876543@winclub.com', status: 'Inactive', ip: '194.35.88.12', device: 'iPhone 12', balance: 470, wins: 10, losses: 8 },
+  { uid: 'B9G8812Z', phone: '03011223344', email: '03011223344@winclub.com', status: 'Active', ip: '103.45.12.234', device: 'Vivo Y21', balance: 3050, wins: 34, losses: 12 },
 ];
 
 const historyRecords = {
@@ -124,7 +124,7 @@ export default function AdminDashboard() {
           const loaded = data.map((m: any) => ({
             uid: m.id,
             phone: m.phone_number || '',
-            email: `${m.phone_number || 'unknown'}@winwave.com`,
+            email: `${m.phone_number || 'unknown'}@winclub.com`,
             status: 'Active',
             ip: 'Unknown',
             device: 'Unknown',

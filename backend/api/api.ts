@@ -44,11 +44,11 @@ router.post('/login', async (req, res) => {
   // Demo account shortcut for local testing and easy access
   if (normalizedPhone === '1234567890' && password === 'demo.user') {
     await logSecurityEvent('login_success', normalizedPhone, context, { demoAccount: true });
-    return res.json({ ok: true, user: { id: 'demo-user', email: '1234567890@winwave.com', phone_number: normalizedPhone }, wallet: { main_balance: 150, wagering_required: 0 } });
+    return res.json({ ok: true, user: { id: 'demo-user', email: 'user_1234567890@winwave.com', phone_number: normalizedPhone }, wallet: { main_balance: 150, wagering_required: 0 } });
   }
 
   try {
-    const email = `${normalizedPhone}@winwave.com`;
+    const email = `user_${normalizedPhone}@winwave.com`;
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,

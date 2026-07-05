@@ -236,7 +236,15 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
                       <td className="py-3 px-4 text-amber-400 font-black font-mono">{row.invite_code}</td>
                       <td className="py-3 px-4 text-gray-300 font-mono text-xs">{row.phone}</td>
                       <td className="py-3 px-4 text-amber-400 font-bold">Rs {row.amount.toLocaleString()}</td>
-                      <td className="py-3 px-4 text-gray-300 text-xs">{row.method}</td>
+                      <td className="py-3 px-4 text-xs">
+                        {row.method === "Big" ? (
+                          <span className="px-2 py-0.5 rounded font-bold bg-red-500/20 text-red-400">Big</span>
+                        ) : row.method === "Small" ? (
+                          <span className="px-2 py-0.5 rounded font-bold bg-green-500/20 text-green-400">Small</span>
+                        ) : (
+                          <span className="text-gray-300">{row.method}</span>
+                        )}
+                      </td>
                       <td className="py-3 px-4">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${statusColor(row.status)}`}>
                           {row.status}

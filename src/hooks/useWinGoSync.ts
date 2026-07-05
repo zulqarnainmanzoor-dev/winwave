@@ -27,7 +27,7 @@ const MODE_INTERVAL: Record<WinGoMode, number> = {
 
 // ── HMAC verification (matches backend signPayload) ───────────────
 // In production set VITE_WINGO_HMAC_SECRET in .env
-const HMAC_SECRET = import.meta.env.VITE_WINGO_HMAC_SECRET ?? "winwave-hmac-dev-secret";
+const HMAC_SECRET = import.meta.env.VITE_WINGO_HMAC_SECRET ?? "winclub-hmac-dev-secret";
 
 async function verifyHmac(data: object, sig: string): Promise<boolean> {
   try {
@@ -92,18 +92,13 @@ export function useWinGoSync(mode: WinGoMode): RoundState & { isTimeUp: boolean 
 
   // ── Local fallback: derive period from corrected clock ──────────
   const deriveLocal = useCallback((nowMs: number): { period: string; timeLeft: number } => {
-    const d        = new Date(nowMs);
-    const secs     = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
-    const interval = MODE_INTERVAL[mode];
-    const roundNum = Math.floor(secs / interval);
+    const interval  = MODE_INTERVAL[mode];
     const prefixes: Record<WinGoMode, string> = { "30s": "1000", "1m": "2000", "3m": "3000", "5m": "4000" };
-    const dateStr  =
-      `${d.getUTCFullYear()}` +
-      `${String(d.getUTCMonth() + 1).padStart(2, "0")}` +
-      `${String(d.getUTCDate()).padStart(2, "0")}`;
+    const epochInterval = Math.floor(nowMs / (interval * 1000));
+    const timeLeft = interval - Math.floor((nowMs / 1000) % interval);
     return {
-      period:   `${dateStr}${prefixes[mode]}${String(roundNum).padStart(5, "0")}`,
-      timeLeft: interval - (secs % interval),
+      period:   `${prefixes[mode]}${epochInterval}`,
+      timeLeft: Math.max(1, timeLeft),
     };
   }, [mode]);
 
@@ -241,10 +236,28 @@ export function useWinGoHistory(mode: WinGoMode, limit = 20) {
 
   useEffect(() => {
     void fetchHistory();
-    // Refresh history every 30 seconds
-    const id = setInterval(() => void fetchHistory(), 30_000);
+    // Refresh history every 5 seconds for near-real-time updates
+    const id = setInterval(() => void fetchHistory(), 5_000);
     return () => clearInterval(id);
   }, [fetchHistory]);
+
+  // Realtime: instantly refresh history when a game_round is completed
+  useEffect(() => {
+    const channel = supabase
+      .channel(`wingo-history-${mode}`)
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "game_rounds",
+        filter: `mode=eq.${mode}`,
+      }, (payload) => {
+        if ((payload.new as any)?.status === "completed") {
+          void fetchHistory();
+        }
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [mode, fetchHistory]);
 
   return { history, refresh: fetchHistory };
 }

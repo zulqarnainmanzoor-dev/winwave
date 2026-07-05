@@ -78,7 +78,7 @@ router.post('/payout', async (req, res) => {
     // Map method to PKPay channel code
     const channelMap: Record<string, string> = { JAZZCASH: "JC", EASYPAISA: "EP", jazzcash: "JC", easypaisa: "EP" };
     const requestMethod = withdrawal.method;
-    const channel = channelMap[requestMethod?.toUpperCase()] || requestMethod;
+    const channel = channelMap[String(requestMethod || '').toUpperCase()] || requestMethod;
 
     // Use withdrawal ID as idempotency key so PKPay doesn't process duplicates
     const idempotencyKey = withdrawal.id;
@@ -107,7 +107,7 @@ router.post('/payout', async (req, res) => {
       headers: {
         "Content-Type":    "application/json",
         "Authorization":   `Bearer ${PAYOUT_API_KEY}`,
-        "Idempotency-Key": idempotencyKey,  // Prevent duplicate processing
+        "Idempotency-Key": String(idempotencyKey),  // Prevent duplicate processing
       },
       body: JSON.stringify(params),
     });

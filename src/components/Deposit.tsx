@@ -354,7 +354,7 @@ export default function Deposit({
           <p className="text-white font-bold mb-1">Deposit tips:</p>
           <p>1.Each deposit will be credited within 1-5 minutes</p>
           <p>
-            2.After the payment is successful, please return to the Winwave
+            2.After the payment is successful, please return to the WinClub
             deposit page to check your account balance.
           </p>
           <p>

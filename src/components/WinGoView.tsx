@@ -45,9 +45,9 @@ const TAB_TO_MODE: Record<string, WinGoMode> = {
 
 export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: { onBack: () => void; onWithdrawClick?: () => void; onDepositClick?: () => void }) {
   const { t } = useLanguage();
-  const { thirdPartyWalletBalance, setThirdPartyWalletBalance, addWageringProgress, wageringRequired, wageringCompleted, uid } = useUser();
+  const { mainWalletBalance, addWageringProgress, wageringRequired, wageringCompleted, uid, refreshUserData } = useUser();
   const { isMuted, toggleMute, play } = useSound();
-  const platformName = usePlatformName("WinWave");
+  const platformName = usePlatformName("WinClub");
   const [isRefreshing, setIsRefreshing] = useState(false);
   const tickFiredRef = useRef<Set<string>>(new Set());
 
@@ -55,7 +55,7 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
   const activeMode = TAB_TO_MODE[activeTab] ?? "30s";
 
   // ── Server-synced timer (replaces all local Date() math) ──────
-  const { period, timeLeft, isTimeUp, roundId: syncedRoundId, targetResult: syncedTargetResult } = useWinGoSync(activeMode);
+  const { period, timeLeft, isTimeUp, roundId: syncedRoundId } = useWinGoSync(activeMode);
 
   // ── History from server engine (encrypted store → API → here) ──
   const { history, refresh: refreshHistory } = useWinGoHistory(activeMode, 20);
@@ -74,7 +74,8 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
   const [betQuantity, setBetQuantity] = useState<number>(1);
   const [betMultiplier, setBetMultiplier] = useState<number>(1);
   const [myBets, setMyBets] = useState<Array<{
-    id: string;
+    id: string;          // client-generated order id (display only)
+    dbId: string | null; // actual betting_history UUID from DB
     tab: string;
     type: string;
     period: string;
@@ -95,35 +96,15 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
   }>>([]);
   const [expandedBetId, setExpandedBetId] = useState<string | null>(null);
   const [resultPopup, setResultPopup] = useState<any | null>(null);
-  // Admin-injected target result from DB (null = auto)
-  const targetResultRef = useRef<string | null>(null);
-  const roundIdRef      = useRef<string | null>(null);
+  const roundIdRef = useRef<string | null>(null);
 
   // ── Register round in DB + subscribe to target_result changes ───
   const getMode = (tab: string): WinGoMode => TAB_TO_MODE[tab] ?? "30s";
 
-  // ── Sync roundId + targetResult from useWinGoSync ────────────
+  // ── Sync roundId from useWinGoSync ───────────────────────────
   useEffect(() => {
-    if (syncedRoundId)      roundIdRef.current      = syncedRoundId;
-    if (syncedTargetResult) targetResultRef.current = syncedTargetResult;
-  }, [syncedRoundId, syncedTargetResult]);
-
-  // Realtime listener: when admin sets target_result, update our ref
-  useEffect(() => {
-    if (!period) return;
-    const channel = supabase
-      .channel(`wingo-round-${period}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "game_rounds",
-          filter: `period=eq.${period}` },
-        (payload) => {
-          targetResultRef.current = (payload.new as any)?.target_result ?? null;
-        }
-      )
-      .subscribe();
-    return () => { void supabase.removeChannel(channel); };
-  }, [period]);
+    if (syncedRoundId) roundIdRef.current = syncedRoundId;
+  }, [syncedRoundId]);
 
   // Hide BottomNav while bet modal or result popup is open
   useEffect(() => {
@@ -151,230 +132,114 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
     if (isTimeUp) setShowBetModal(false);
   }, [isTimeUp]);
 
-  // Track the last period we resolved bets for — prevents re-resolving on history refresh
+  // Track the last period we resolved bets for — prevents re-resolving on re-renders
   const lastResolvedPeriodRef = useRef<string>("");
-  // RTP phase: 'honeymoon' | 'normal' | 'controlled_loss'
-  const rtpPhaseRef = useRef<string>("normal");
+  // Track the previous period to detect period transitions
+  const prevPeriodRef = useRef<string>("");
 
-  // Fetch RTP phase from server on mount and after each bet
-  const fetchRtpPhase = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    const userId = session?.user?.id;
-    if (!userId) return;
-    const { data } = await (supabase.rpc as any)("get_user_rtp_phase", { p_user_id: userId });
-    if (data) rtpPhaseRef.current = data;
-  }, []);
-
-  useEffect(() => { void fetchRtpPhase(); }, [fetchRtpPhase]);
-
-  // Apply RTP phase to a result: controlled_loss flips result against user's bet
-  const applyRtpPhase = useCallback((result: typeof history[0], bets: any[]) => {
-
-    const phase = rtpPhaseRef.current;
-    const pendingBets = bets.filter(b => b.status === "pending" && b.period === result.period);
-    if (!pendingBets.length || phase === "normal") return result;
-
-    if (phase === "honeymoon") {
-      // 50% chance to force a win for the user's bet
-      if (Math.random() < 0.5 && pendingBets[0]) {
-        const bet = pendingBets[0];
-        if (bet.type === "size") {
-          const winNum = bet.value === "Big" ? 6 : 2;
-          return { ...result, number: winNum, size: bet.value,
-            color: winNum % 2 === 0 ? "red" : "green" };
-        }
-        if (bet.type === "color" && bet.value === "Green") return { ...result, number: 3, size: "Small", color: "green" };
-        if (bet.type === "color" && bet.value === "Red")   return { ...result, number: 2, size: "Small", color: "red" };
-        if (bet.type === "number") return { ...result, number: Number(bet.value),
-          size: Number(bet.value) >= 5 ? "Big" : "Small",
-          color: Number(bet.value) === 0 || Number(bet.value) === 5 ? "violet" : Number(bet.value) % 2 === 0 ? "red" : "green" };
-      }
-    }
-
-    if (phase === "controlled_loss") {
-      // Force result opposite to user's bet
-      const bet = pendingBets[0];
-      if (bet?.type === "size") {
-        const loseNum = bet.value === "Big" ? 2 : 7;
-        return { ...result, number: loseNum, size: bet.value === "Big" ? "Small" : "Big",
-          color: loseNum % 2 === 0 ? "red" : "green" };
-      }
-      if (bet?.type === "color") {
-        if (bet.value === "Green") return { ...result, number: 2, size: "Small", color: "red" };
-        if (bet.value === "Red")   return { ...result, number: 3, size: "Small", color: "green" };
-        if (bet.value === "Violet") return { ...result, number: 2, size: "Small", color: "red" };
-      }
-      // For number bets, pick adjacent number
-      if (bet?.type === "number") {
-        const loseNum = (Number(bet.value) + 1) % 10;
-        return { ...result, number: loseNum, size: loseNum >= 5 ? "Big" : "Small",
-          color: loseNum === 0 || loseNum === 5 ? "violet" : loseNum % 2 === 0 ? "red" : "green" };
-      }
-    }
-    return result;
-  }, []);
-
-  // Period finish handler: resolve bets locally, then hard-sync the authoritative betting_history status/win.
+  // Period transition handler: when period changes, the previous period just ended.
+  // Poll DB until the engine settles bets for that period, then refresh everything.
   useEffect(() => {
-    if (history.length === 0) return;
-    const latestResult = history[0];
-    if (!latestResult.period || latestResult.period === lastResolvedPeriodRef.current) return;
-    // We resolve *previous* period once server history updates; avoid resolving the currently ticking period.
-    if (latestResult.period === period) return;
+    if (!period) return;
+    const prevPeriod = prevPeriodRef.current;
+    prevPeriodRef.current = period;
 
-    const finishedPeriodId = latestResult.period;
+    // No previous period yet (first render) or already resolved
+    if (!prevPeriod || prevPeriod === period) return;
+    if (prevPeriod === lastResolvedPeriodRef.current) return;
+
+    const finishedPeriodId = prevPeriod;
     lastResolvedPeriodRef.current = finishedPeriodId;
 
-    // Apply admin-forced target_result at resolution time
-    const forced = targetResultRef.current; // 'BIG' | 'SMALL' | 'NUM:X' | null
-
-    let effectiveResult = { ...latestResult };
-    if (forced === "BIG" && latestResult.size !== "Big") {
-      const bigNum = [6, 7, 8, 9][latestResult.number % 4];
-      effectiveResult = {
-        ...latestResult,
-        number: bigNum,
-        size: "Big",
-        color: bigNum % 2 === 0 ? "red" : "green",
-      };
-    } else if (forced === "SMALL" && latestResult.size !== "Small") {
-      const smallNum = [1, 2, 3, 4][latestResult.number % 4];
-      effectiveResult = {
-        ...latestResult,
-        number: smallNum,
-        size: "Small",
-        color: smallNum % 2 === 0 ? "red" : "green",
-      };
-    } else if (forced?.startsWith("NUM:")) {
-      const exactNum = parseInt(forced.slice(4), 10);
-      if (!isNaN(exactNum) && exactNum >= 0 && exactNum <= 9) {
-        effectiveResult = {
-          ...latestResult,
-          number: exactNum,
-          size: exactNum >= 5 ? "Big" : "Small",
-          color:
-            exactNum === 0 || exactNum === 5
-              ? "violet"
-              : exactNum % 2 === 0
-                ? "red"
-                : "green",
-        };
-      }
-    }
-    if (forced) targetResultRef.current = null;
-
-    // 1) Local resolve for immediate UI.
-    setMyBets((prev) => {
-      // Apply RTP phase before resolving (only if no admin override)
-      const rtpResult = forced ? effectiveResult : applyRtpPhase(effectiveResult, prev);
-      let hasUpdates = false;
-      let latestResolvedBet: any = null;
-      let totalWinAmount = 0;
-
-      const newBets = prev.map((bet) => {
-        if (bet.status === "pending" && bet.period === rtpResult.period) {
-          hasUpdates = true;
-          let isWin = false;
-
-          if (bet.type === "size" && bet.value === rtpResult.size) isWin = true;
-          if (bet.type === "number" && Number(bet.value) === rtpResult.number) isWin = true;
-          if (bet.type === "color") {
-            if (bet.value === "Green" && (rtpResult.color === "green" || rtpResult.number === 5)) isWin = true;
-            if (bet.value === "Red" && (rtpResult.color === "red" || rtpResult.number === 0)) isWin = true;
-            if (bet.value === "Violet" && rtpResult.color === "violet") isWin = true;
-          }
-
-          const winAmount = isWin ? bet.amount * (bet.type === "number" ? 9 : 1.96) : 0;
-          if (isWin) totalWinAmount += winAmount;
-
-          const resolvedBet = {
-            ...bet,
-            status: isWin ? "win" : "lose",
-            isWin,
-            winAmount,
-            resultNumber: rtpResult.number,
-            resultColor: rtpResult.color,
-            resultSize: rtpResult.size,
-          };
-
-          if (bet.tab === activeTab) latestResolvedBet = resolvedBet;
-          return resolvedBet;
-        }
-        return bet;
-      });
-
-      if (latestResolvedBet) {
-        setResultPopup(latestResolvedBet);
-        play(latestResolvedBet.isWin ? "win" : "lose");
-        void refreshHistory();
-      }
-
-      if (totalWinAmount > 0) {
-        setThirdPartyWalletBalance(thirdPartyWalletBalance + totalWinAmount);
-      }
-
-      return (hasUpdates ? newBets : prev) as any;
-    });
-
-    // 2) Backend hard-sync: clear pending mismatch and force-sync wallets.
+    // Poll DB until the engine has settled this period (max 10s, every 1s)
     (async () => {
-      try {
-        if (!uid || !finishedPeriodId) return;
-
-        // Pull authoritative betting_history rows for this user+finished period.
-        // IMPORTANT: we use this to clear any pending mismatch.
-        const { data: updatedRows, error: fetchErr } = await supabase
+      if (!uid || !finishedPeriodId) return;
+      let settled = false;
+      for (let attempt = 0; attempt < 10 && !settled; attempt++) {
+        await new Promise(r => setTimeout(r, 1000));
+        const { data: betRows } = await supabase
           .from("betting_history")
-          .select("status, win_amount, period_id, amount")
+          .select("id, status, win_amount, amount, result_number, result_size, result_color")
           .eq("user_id", uid)
-          .eq("period_id", finishedPeriodId);
+          .eq("period", finishedPeriodId)
+          .neq("status", "pending");
 
-        if (fetchErr) {
-          console.warn("Period sync fetch failed:", fetchErr);
-        }
+        if (!betRows?.length) continue;
+        settled = true;
 
-        const rows = (updatedRows as any[]) || [];
-        if (rows.length) {
-          setMyBets((prev) =>
-            prev.map((b) => {
-              if (b.period !== finishedPeriodId) return b;
+        // Update My History state — match by DB id first, fall back to amount
+        setMyBets((prev) =>
+          prev.map((b) => {
+            if (b.period !== finishedPeriodId) return b;
+            const row = b.dbId
+              ? betRows.find((r: any) => r.id === b.dbId)
+              : betRows.find((r: any) => Number(r.amount) === Number(b.amount));
+            if (!row) return b;
+            const isWin = row.status === "win";
+            return {
+              ...b,
+              status: isWin ? "win" : "lose",
+              isWin,
+              winAmount:    Number(row.win_amount ?? 0),
+              resultNumber: row.result_number,
+              resultColor:  row.result_color,
+              resultSize:   row.result_size,
+            };
+          })
+        );
 
-              const row = rows.find((r) => Number(r.amount ?? 0) === Number(b.amount ?? 0));
-              if (!row) return b;
-
-              const status = row.status;
-              if (status === "pending") return b; // keep as-is
-
-              const isWin = status === "win";
-              return {
-                ...b,
-                status: isWin ? "win" : "lose",
-                isWin,
-                winAmount: Number(row.win_amount ?? b.winAmount ?? 0),
-              };
-            })
-          );
-        }
-
-        // Force refresh balances from DB (prevents double calc drift)
-        const { data: profile, error: profileErr } = await supabase
-          .from("users")
-          .select("main_balance, game_balance")
-          .eq("id", uid)
-          .maybeSingle();
-
-        if (!profileErr && profile) {
-          if (typeof (profile as any).game_balance !== "undefined") {
-            setThirdPartyWalletBalance(Number((profile as any).game_balance));
+        // Show popup for the active tab's bet
+        setMyBets(prev => {
+          const myBet = prev.find(b => b.period === finishedPeriodId && b.tab === activeTab);
+          if (myBet && myBet.status !== "pending") {
+            setResultPopup(myBet);
+            play(myBet.isWin ? "win" : "lose");
           }
-          // main_balance is handled by UserContext realtime; but if it exists, refresh is safe.
-          // (UserContext doesn't expose setMainBalance here, so we rely on realtime profile-changes.)
-        }
-      } catch (err) {
-        console.error("Period calculation fetch failed:", err);
+          return prev;
+        });
+
+        void refreshHistory();
+
+        // Refresh balance + wagering from DB
+        await refreshUserData();
       }
     })();
-  }, [history, period, activeTab, thirdPartyWalletBalance, setThirdPartyWalletBalance, applyRtpPhase, uid, play]);
+  }, [period, uid, activeTab, play, refreshHistory, refreshUserData]);
+
+  // Realtime: instantly update My History when betting_history rows are settled
+  useEffect(() => {
+    if (!uid) return;
+    const channel = supabase
+      .channel(`my-bets-${uid}`)
+      .on("postgres_changes", {
+        event: "UPDATE",
+        schema: "public",
+        table: "betting_history",
+        filter: `user_id=eq.${uid}`,
+      }, (payload) => {
+        const row = payload.new as any;
+        if (!row || row.status === "pending") return;
+        const isWin = row.status === "win";
+        setMyBets(prev =>
+          prev.map(b =>
+            (b.dbId === row.id || (b.period === row.period && Number(b.amount) === Number(row.amount)))
+              ? {
+                  ...b,
+                  dbId:         row.id,
+                  status:       isWin ? "win" : "lose",
+                  isWin,
+                  winAmount:    Number(row.win_amount ?? 0),
+                  resultNumber: row.result_number,
+                  resultColor:  row.result_color,
+                  resultSize:   row.result_size,
+                }
+              : b
+          )
+        );
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [uid]);
 
 
 
@@ -429,17 +294,37 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
       return;
     }
     
-    if (thirdPartyWalletBalance < total) {
+    if (mainWalletBalance < total) {
       alert("Insufficient balance");
       return;
     }
 
     play("cash");
-    setThirdPartyWalletBalance(thirdPartyWalletBalance - total);
+
+    // Deduct balance in DB first — single source of truth
+    (async () => {
+      const { data: walletRow } = await (supabase as any)
+        .from("users")
+        .select("main_balance")
+        .eq("id", uid)
+        .maybeSingle();
+      const current = Number((walletRow as any)?.main_balance ?? mainWalletBalance);
+      if (current < total) {
+        alert("Insufficient balance");
+        return;
+      }
+      await (supabase as any)
+        .from("users")
+        .update({ main_balance: current - total })
+        .eq("id", uid);
+      await refreshUserData();
+    })();
+
     addWageringProgress(total);
 
     const betRecord = {
       id: `WG${Date.now()}${Math.floor(Math.random() * 100000)}`,
+      dbId: null as string | null,
       tab: activeTab,
       type: selectedBet.type,
       period,
@@ -457,25 +342,28 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
 
     setMyBets((prev) => [betRecord, ...prev]);
 
-    // Persist to betting_history table (fire-and-forget)
+    // Persist to betting_history table — store returned DB id for reliable matching
     (supabase as any).from("betting_history").insert({
-      user_id:  uid,
+      user_id:    uid,
       period,
-      game_type: "wingo",
-      mode:      getMode(activeTab),
-      bet_type:  selectedBet.type,
-      bet_value: String(selectedBet.value),
-      amount:    total,
-      round_id:  roundIdRef.current ?? undefined,
-      status:    "pending",
+      game_type:  "wingo",
+      mode:       getMode(activeTab),
+      bet_type:   selectedBet.type,
+      bet_value:  String(selectedBet.value),
+      amount:     total,
+      round_id:   roundIdRef.current ?? undefined,
+      status:     "pending",
       created_at: new Date().toISOString(),
-    }).then(({ error }: { error: any }) => {
+    }).select("id").single().then(({ data, error }: { data: any; error: any }) => {
       if (error) {
         console.warn("betting_history insert:", error.message);
-        // Refund on error
-        setThirdPartyWalletBalance(thirdPartyWalletBalance + total);
-      } else {
-        void fetchRtpPhase(); // refresh RTP phase after each bet
+      } else if (data?.id) {
+        // Patch the local bet record with the real DB id
+        setMyBets(prev =>
+          prev.map(b =>
+            b.id === betRecord.id ? { ...b, dbId: data.id } : b
+          )
+        );
       }
     });
 
@@ -551,7 +439,7 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
                 <div className="flex flex-col items-center justify-center mb-1">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-white font-bold text-2xl drop-shadow">
-                      Rs.{thirdPartyWalletBalance.toFixed(2)}
+                      Rs.{mainWalletBalance.toFixed(2)}
                     </span>
                     <RefreshCw
                       className={`w-4 h-4 text-white/70 cursor-pointer hover:text-white transition-colors ${isRefreshing ? "animate-spin" : ""}`}
@@ -559,7 +447,7 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
                     />
                   </div>
                   <span className="text-[#ffa502] text-xs font-bold bg-black/30 px-3 py-0.5 rounded-full">
-                    {hasWager ? "Cash Balance" : "Game Wallet"}
+                    {hasWager ? "Cash Balance" : "Cash Balance"}
                   </span>
                 </div>
 
@@ -611,7 +499,7 @@ export default function WinGoView({ onBack, onWithdrawClick, onDepositClick }: {
           <div className="flex items-center gap-3">
             <Volume2 className="w-5 h-5 text-amber-500" />
             <span className="text-white/80 text-xs truncate max-w-[200px]">
-                Welcome to WINWAVE platform, we will serve you wholeheartedly!
+                Welcome to WINCLUB platform, we will serve you wholeheartedly!
               </span>
           </div>
           <button className="bg-gradient-to-r from-[#fcd34d] to-[#fbbf24] text-black text-[10px] font-bold px-3 py-1 rounded-full whitespace-nowrap">

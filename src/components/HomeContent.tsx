@@ -56,17 +56,19 @@ const VISIBLE_GAMES = [
 
 export default function HomeContent({
   onWinGoClick,
+  onDepositClick,
 }: {
   onWinGoClick?: () => void;
+  onDepositClick?: () => void;
 }) {
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [maintenanceGame, setMaintenanceGame] = useState('');
   
-  // 1. Context ko safe treat karne ke liye dynamic cast kiya
-  const ctx = useUser() as any; 
-  const activeUser = ctx?.user || ctx?.profile;
+  const ctx = useUser() as any;
+  const isAuthenticated = Boolean(ctx?.isLoggedIn || ctx?.uid);
+  const currentMainBalance = Number(ctx?.mainWalletBalance ?? ctx?.balance ?? 0);
+  const refreshUserData = ctx?.refreshUserData;
 
-  // 2. Recharge popup state control register
   const [showRechargeModal, setShowRechargeModal] = useState(false);
 
   const isGameVisible = (gameName: string) => {
@@ -78,19 +80,22 @@ export default function HomeContent({
     setShowMaintenance(true);
   };
 
-  // ── NEW: WinGo access check ──────────────────────────────────
-  const handleWinGoPlay = () => {
-    if (!activeUser) {
-      alert("Please log in to play WinGo.");
+  const handleWinGoPlay = async () => {
+    if (!isAuthenticated) {
+      window.location.hash = '/';
       return;
     }
-    
-    // Agar user ne recharge nahi kiya aur main balance bhi 0 hai
-    if (!activeUser.has_recharged && Number(activeUser.main_balance) <= 0) {
+
+    if (refreshUserData && ctx?.uid) {
+      await refreshUserData(ctx.uid);
+    }
+
+    const liveBalance = Number(ctx?.mainWalletBalance ?? ctx?.balance ?? currentMainBalance ?? 0);
+    if (liveBalance <= 0) {
       setShowRechargeModal(true);
       return;
     }
-    
+
     onWinGoClick?.();
   };
 
@@ -531,24 +536,21 @@ export default function HomeContent({
           </div>
         </div>
       )}
-      {/* ── CLEAN BLACK ROUNDED OVERLAY POPUP ── */}
       {showRechargeModal && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-xs bg-zinc-900 border border-zinc-800 rounded-2xl p-6 text-center shadow-2xl">
-            {/* Heading */}
-            <h3 className="text-lg font-bold text-white tracking-wide mb-1">
-              Recharge Not Received
+            <h3 className="text-lg font-bold text-white tracking-wide mb-2">
+              Recharge Required
             </h3>
             <p className="text-xs text-zinc-400 mb-6">
-              Please complete your first deposit to play WinGo.
+              Your wallet balance is insufficient. Please recharge your wallet before playing WinGo.
             </p>
 
-            {/* Action Buttons */}
             <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
                   setShowRechargeModal(false);
-                  window.location.hash = '/deposit'; 
+                  onDepositClick?.();
                 }}
                 className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-black font-semibold rounded-xl text-sm transition"
               >
@@ -558,7 +560,7 @@ export default function HomeContent({
                 onClick={() => setShowRechargeModal(false)}
                 className="w-full py-2 text-zinc-400 hover:text-white text-xs font-medium transition"
               >
-                Close
+                Cancel
               </button>
             </div>
           </div>

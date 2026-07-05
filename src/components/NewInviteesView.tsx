@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { ChevronLeft, AlertCircle, ChevronRight } from "lucide-react";
-import { supabase } from "../lib/supabaseClient";
 import { useUser } from "../context/UserContext";
+import { supabase } from "../lib/supabaseClient";
 
 interface Invitee {
   id: string;
@@ -55,26 +55,37 @@ export default function NewInviteesView({ onBack }: { onBack: () => void }) {
       setLoading(true);
       setError(null);
       const offset = page * PAGE_SIZE;
-      const { data, error: queryError, count } = await (supabase as any)
-        .from("users")
-        .select("id, phone_number, referral_code, invite_code, created_at", { count: "exact" })
-        .eq("referred_by", uid)
-        .gte("created_at", from)
-        .lt("created_at", to)
-        .order("created_at", { ascending: false })
-        .range(offset, offset + PAGE_SIZE - 1);
 
-      if (cancelled) return;
+      try {
+        let query = (supabase as any)
+          .from('users')
+          .select('id, phone_number, referral_code, invite_code, created_at', { count: 'exact' })
+          .eq('referred_by', uid)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + PAGE_SIZE - 1);
 
-      if (queryError) {
+        if (activeTab === 'today') {
+          query = query.gte('created_at', from).lt('created_at', to);
+        } else if (activeTab === 'yesterday') {
+          query = query.gte('created_at', from).lt('created_at', to);
+        } else {
+          query = query.gte('created_at', from).lt('created_at', to);
+        }
+
+        const { data, error } = await query;
+
+        if (cancelled) return;
+        if (error) throw error;
+
+        const rows = (data || []) as Invitee[];
+        setInvitees(page === 0 ? rows : (prev) => [...prev, ...rows]);
+        setHasMore((rows.length || 0) === PAGE_SIZE);
+      } catch (queryError: any) {
         console.error("Supabase Error:", queryError);
+        if (cancelled) return;
         setError(queryError.message || "Unable to load invitees right now.");
         setInvitees([]);
         setHasMore(false);
-      } else {
-        const rows = (data as Invitee[]) ?? [];
-        setInvitees(page === 0 ? rows : (prev) => [...prev, ...rows]);
-        setHasMore((count ?? 0) > offset + rows.length);
       }
 
       setLoading(false);

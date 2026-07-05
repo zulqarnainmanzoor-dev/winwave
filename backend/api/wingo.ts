@@ -16,7 +16,6 @@
 import { Router, Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
-import { getActiveRound, getHistory } from "../game-engine/resultStore.js";
 import { getCurrentRTP } from "../game-engine/wingoEngine.js";
 
 const router = Router();
@@ -99,7 +98,7 @@ router.use(requireAuth);
 
 // ── GET /api/wingo/state?mode=30s ─────────────────────────────────
 // Returns: period, timeLeft (seconds), endsAt, serverUtcMs
-router.get("/state", (req: Request, res: Response) => {
+router.get("/state", async (req: Request, res: Response) => {
   const mode = String(req.query.mode ?? "30s");
   const validModes = ["30s", "1m", "3m", "5m"];
   if (!validModes.includes(mode)) {
@@ -107,48 +106,72 @@ router.get("/state", (req: Request, res: Response) => {
     return;
   }
 
-  const active = getActiveRound(mode);
-  const now    = Date.now();
+  try {
+    const { data: active, error } = await supabaseAdmin
+      .from("game_rounds")
+      .select("period, ends_at, target_result")
+      .eq("game_type", "wingo")
+      .eq("mode", mode)
+      .eq("status", "active")
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-  if (!active) {
-    // Fallback: derive from server UTC directly
-    const intervals: Record<string, number> = { "30s": 30, "1m": 60, "3m": 180, "5m": 300 };
-    const prefixes:  Record<string, string> = { "30s": "1000", "1m": "2000", "3m": "3000", "5m": "4000" };
-    const d        = new Date(now);
-    const secs     = d.getUTCHours() * 3600 + d.getUTCMinutes() * 60 + d.getUTCSeconds();
-    const interval = intervals[mode];
-    const roundNum = Math.floor(secs / interval);
-    const dateStr  =
-      `${d.getUTCFullYear()}` +
-      `${String(d.getUTCMonth() + 1).padStart(2, "0")}` +
-      `${String(d.getUTCDate()).padStart(2, "0")}`;
-    const period   = `${dateStr}${prefixes[mode]}${String(roundNum).padStart(5, "0")}`;
-    const timeLeft = interval - (secs % interval);
+    if (error) throw error;
 
-    res.json(signPayload({ period, timeLeft, serverUtcMs: now, mode }));
-    return;
+    const now = Date.now();
+    if (!active) {
+      res.json(signPayload({ period: "", timeLeft: 0, serverUtcMs: now, mode, targetResult: null }));
+      return;
+    }
+
+    const endsAtMs = new Date(active.ends_at).getTime();
+    const timeLeft = Math.max(0, Math.round((endsAtMs - now) / 1000));
+
+    res.json(signPayload({
+      period:      active.period,
+      timeLeft,
+      endsAt:      active.ends_at,
+      serverUtcMs: now,
+      mode,
+      targetResult: active.target_result ?? null,
+    }));
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Failed to load round state" });
   }
-
-  const endsAtMs = new Date(active.endsAt).getTime();
-  const timeLeft = Math.max(0, Math.round((endsAtMs - now) / 1000));
-
-  res.json(signPayload({
-    period:      active.period,
-    timeLeft,
-    endsAt:      active.endsAt,
-    serverUtcMs: now,
-    mode,
-  }));
 });
 
 // ── GET /api/wingo/history?mode=30s&limit=20 ─────────────────────
 // Returns last N completed results from encrypted store
-router.get("/history", (req: Request, res: Response) => {
+router.get("/history", async (req: Request, res: Response) => {
   const mode  = String(req.query.mode  ?? "30s");
   const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? "20"), 10)));
 
-  const history = getHistory(mode, limit);
-  res.json(signPayload({ mode, history, serverUtcMs: Date.now() }));
+  try {
+    const { data: rows, error } = await supabaseAdmin
+      .from("game_rounds")
+      .select("period, mode, result_number, result_size, result_color, ends_at")
+      .eq("game_type", "wingo")
+      .eq("mode", mode)
+      .eq("status", "completed")
+      .order("ends_at", { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+
+    const history = (rows ?? []).map((row: any) => ({
+      period: row.period,
+      mode: row.mode,
+      number: row.result_number,
+      size: row.result_size,
+      color: row.result_color,
+      resolvedAt: row.ends_at,
+    }));
+
+    res.json(signPayload({ mode, history, serverUtcMs: Date.now() }));
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "Failed to load history" });
+  }
 });
 
 // ── GET /api/wingo/rtp — admin only ──────────────────────────────

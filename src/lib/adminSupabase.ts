@@ -2,15 +2,15 @@
 // Only import this in /src/admin/ pages. Never use in user-facing code.
 import { createClient } from '@supabase/supabase-js';
 
-// Prefer VITE_* env, but fall back to NEXT_PUBLIC_* if present.
-// NOTE: adminSupabase must be used ONLY on server/admin paths.
-// Emergency bypass for local dev when env var names mismatch.
-// This file must be used only by admin pages.
-const url = 'https://ealtebiutcnaobjopvht.supabase.co';
+// Must point to the SAME project as VITE_SUPABASE_URL in .env
+const url =
+  import.meta.env.VITE_SUPABASE_URL ??
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
 
-// Service role key (from your .env)
 const svcKey =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVhbHRlYml1dGNuYW9iam9wdmh0Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MjY1MjAwOCwiZXhwIjoyMDk4MjI4MDA4fQ.0YRBDhdlzEzjoiKT7bW0gqbDJrm9bY2kcFbCHgdDPZ8';
+  import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY ??
+  import.meta.env.SERVICE_ROLE_KEY ??
+  import.meta.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY ?? '';
 
 if (!url || !svcKey) {
   console.error('[adminSupabase] Missing Supabase admin URL/service role key');

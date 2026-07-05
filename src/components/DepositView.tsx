@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChevronLeft,
   HeadphonesIcon,
@@ -21,6 +21,8 @@ export default function DepositView({
   // Safe Destructuring with Fallbacks to prevent white screen crashes
   const userContext = useUser();
   const balance = userContext?.balance ?? 0;
+  const uid = userContext?.uid;
+  const refreshUserData = userContext?.refreshUserData;
   const selectedPaymentMethod = userContext?.selectedPaymentMethod ?? "jazzcash";
   const setSelectedPaymentMethod = userContext?.setSelectedPaymentMethod ?? (() => {});
 
@@ -82,8 +84,16 @@ export default function DepositView({
   // For backwards-compatibility with older variable names used elsewhere
   const easypaisaLinks = EASY_PAISA_LINKS;
 
+  useEffect(() => {
+    if (!uid || !refreshUserData) return;
+    void refreshUserData();
+  }, [uid, refreshUserData]);
+
   const handleRefresh = () => {
     setIsRefreshing(true);
+    if (uid && refreshUserData) {
+      void refreshUserData();
+    }
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
@@ -125,12 +135,16 @@ export default function DepositView({
       try {
         const txId = `TX-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
         const userId = (userContext as any)?.uid || null;
-        supabase.from('transactions').insert([{ id: txId, user_id: userId, type: 'deposit', amount: amountToPay, status: 'pending', gateway_ref: targetUrl }]).then(() => {
-          // redirect after record created (best-effort)
-          window.location.href = targetUrl;
-        }).catch(() => {
-          window.location.href = targetUrl;
-        });
+        void (async () => {
+          try {
+            await (supabase as any)
+              .from('transactions')
+              .insert([{ id: txId, user_id: userId, type: 'deposit', amount: amountToPay, status: 'pending', gateway_ref: targetUrl }]);
+            window.location.href = targetUrl;
+          } catch {
+            window.location.href = targetUrl;
+          }
+        })();
         return;
       } catch (e) {
         // fallback to redirect
@@ -370,7 +384,7 @@ export default function DepositView({
           <p className="text-white font-bold mb-1">Deposit tips:</p>
           <p>1.Each deposit will be credited within 1-5 minutes</p>
           <p>
-            2.After the payment is successful, please return to the Winwave
+            2.After the payment is successful, please return to the WinClub
             deposit page to check your account balance.
           </p>
           <p>
