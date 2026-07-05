@@ -15,9 +15,12 @@ interface SubStats {
 interface InviteeRow {
   id: string;
   phone_number: string | null;
-  invite_code:  string | null;
-  total_bets:   number;
+  referral_code: string | null;
+  invite_code: string | null;
+  total_bets: number;
   account_status: string | null;
+  created_at: string;
+  referred_by: string | null;
 }
 
 interface SubordinateRow {
@@ -153,11 +156,13 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
     const dateRange = getDateRange(selectedDate);
 
     // Deposit stats
-    let depQ = (supabase as any).from("deposit_history").select("user_id, amount").in("user_id", targetIds).eq("status", "success");
+    let depQ = (supabase as any).from("deposit_history").select("user_id, amount, status").in("user_id", targetIds);
     if (dateRange) depQ = depQ.gte("created_at", dateRange.from).lt("created_at", dateRange.to);
     const { data: deps } = await depQ;
 
-    const depRows = deps ?? [];
+    const depRows = (deps ?? []).filter((d: any) =>
+      ['success', 'completed', 'approved', 'done'].includes(String(d?.status || '').toLowerCase())
+    );
     const uniqueDepositors = new Set(depRows.map((d: any) => d.user_id));
     const depAmount = depRows.reduce((s: number, d: any) => s + Number(d.amount), 0);
 
@@ -203,7 +208,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
     console.log('🔍 [InviteesOverview] Fetching DIRECT invitees for effectiveUid:', effectiveUid);
     const { data: directInvitees, error: directError } = await supabase
       .from("users")
-      .select("id, phone_number, invite_code, total_bets, created_at, referred_by")
+      .select("id, phone_number, referral_code, invite_code, total_bets, created_at, referred_by")
       .eq('referred_by', effectiveUid)
       .order("created_at", { ascending: false });
     
@@ -226,17 +231,17 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
         // Search 1: Match by id (exact or partial)
         const { data: idMatches, error: idError } = await supabase
           .from("users")
-          .select("id, phone_number, invite_code, total_bets, account_status, created_at, referred_by")
+          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
           .ilike('id', `%${searchTerm}%`);
         
         if (idError) throw idError;
         console.log('🔍 [InviteesOverview] ID matches:', idMatches?.length || 0);
         
-        // Search 2: Match by invite_code
+        // Search 2: Match by referral_code
         const { data: codeMatches, error: codeError } = await supabase
           .from("users")
-          .select("id, phone_number, invite_code, total_bets, account_status, created_at, referred_by")
-          .ilike('invite_code', `%${searchTerm}%`);
+          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
+          .ilike('referral_code', `%${searchTerm}%`);
         
         if (codeError) throw codeError;
         console.log('🔍 [InviteesOverview] Code matches:', codeMatches?.length || 0);
@@ -244,7 +249,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
         // Search 3: Match by phone_number
         const { data: phoneMatches, error: phoneError } = await supabase
           .from("users")
-          .select("id, phone_number, invite_code, total_bets, account_status, created_at, referred_by")
+          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
           .ilike('phone_number', `%${searchTerm}%`);
         
         if (phoneError) throw phoneError;
@@ -253,7 +258,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
         // Search 4: Match by referred_by (normalized)
         const { data: referredMatches, error: referredError } = await supabase
           .from("users")
-          .select("id, phone_number, invite_code, total_bets, account_status, created_at, referred_by")
+          .select("id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by")
           .ilike('referred_by', `%${normalizedSearch}%`);
         
         if (referredError) throw referredError;
@@ -313,7 +318,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
       // Step 1: Get all direct members (Level 1) - users referred by current user
       const { data: directMembers, error: directError } = await supabase
         .from("users")
-        .select("id, referral_code, total_deposit, total_bets, created_at, phone_number, referred_by")
+        .select("id, referral_code, invite_code, total_deposit, total_bets, created_at, phone_number, referred_by")
         .eq("referred_by", effectiveUid);
       
       if (directError) throw directError;
@@ -327,7 +332,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
       if (directMemberIds.length > 0) {
         const { data: teamData, error: teamError } = await supabase
           .from("users")
-          .select("id, referral_code, total_deposit, total_bets, created_at, phone_number, referred_by")
+          .select("id, referral_code, invite_code, total_deposit, total_bets, created_at, phone_number, referred_by")
           .in("referred_by", directMemberIds);
         
         if (teamError) throw teamError;
@@ -358,13 +363,28 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
         console.log('🔍 [InviteesOverview] Filtered subordinates:', allSubordinates.length);
       }
       
+      const memberIds = allSubordinates.map((sub: any) => sub.id).filter(Boolean);
+      let commissionMap: Record<string, number> = {};
+      if (memberIds.length > 0) {
+        const { data: commissionRows, error: commissionError } = await supabase
+          .from("referral_commissions")
+          .select("inviter_id, amount")
+          .in("inviter_id", memberIds);
+
+        if (!commissionError) {
+          for (const row of commissionRows || []) {
+            commissionMap[row.inviter_id] = (commissionMap[row.inviter_id] || 0) + Number(row.amount || 0);
+          }
+        }
+      }
+
       // Step 5: Map to SubordinateRow format - use referral_code as uid
       const mappedSubordinates: SubordinateRow[] = allSubordinates.map((sub: any) => ({
         id: sub.id,
-        uid: sub.referral_code || sub.id.replace(/-/g, '').slice(0, 9),
+        uid: sub.invite_code || sub.referral_code || sub.id.replace(/-/g, '').slice(0, 9),
         level: sub.level,
         deposit_amount: Number(sub.total_deposit || 0),
-        commission: Number(sub.total_bets || 0) * 0.005, // 0.5% commission rate
+        commission: commissionMap[sub.id] || 0,
         created_at: sub.created_at,
         phone_number: sub.phone_number
       }));
@@ -593,21 +613,21 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                 </div>
                 {invitees.map((u: any) => {
                   const memberType = u.referred_by === uid ? "Direct" : "Team";
-                  const isFound = u.referred_by === uid || directIds.includes(u.referred_by || "");
+                  const statusLabel = u.account_status === "banned" ? "Banned" : u.account_status === "suspended" ? "Suspended" : "Active";
+                  const statusClass = u.account_status === "banned" ? "text-red-500" : u.account_status === "suspended" ? "text-yellow-500" : "text-green-400";
+                  const displayCode = u.invite_code || u.referral_code || "—";
                   return (
                     <div key={u.id} className="grid grid-cols-4 p-3 text-xs text-center items-center gap-1">
-                      <span className="font-mono text-white font-bold">{maskPhone(u.phone_number)}</span>
+                      <div className="min-w-0">
+                        <div className="font-mono text-white font-bold truncate">{maskPhone(u.phone_number)}</div>
+                        <div className="text-[10px] text-gray-500 truncate">{displayCode}</div>
+                      </div>
                       <span className="text-gray-400 text-[10px]">{new Date(u.created_at).toLocaleDateString()}</span>
-                      <span className={`text-[10px] font-black uppercase ${
-                        memberType === "Direct" ? "text-[#ffa502]" : "text-green-400"
-                      }`}>
+                      <span className={`text-[10px] font-black uppercase ${memberType === "Direct" ? "text-[#ffa502]" : "text-green-400"}`}>
                         {memberType}
                       </span>
-                      <span className={`text-[10px] font-black uppercase ${
-                        u.account_status === "banned"    ? "text-red-500" :
-                        u.account_status === "suspended" ? "text-yellow-500" : "text-green-400"
-                      }`}>
-                        {isFound ? "Founded" : "Not Found"}
+                      <span className={`text-[10px] font-black uppercase ${statusClass}`}>
+                        {statusLabel}
                       </span>
                     </div>
                   );

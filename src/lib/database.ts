@@ -8,7 +8,7 @@ import { supabase, Database } from './supabaseClient';
 export async function fetchProfile(userId: string) {
   const { data, error } = await supabase
     .from('users')
-    .select('id, phone_number, invite_code, inviter_code, main_balance, game_balance, total_bets, vip_level, is_agent, agent_id, manual_verification, referred_by, withdrawal_pin, bank_details, created_at')
+    .select('id, phone_number, referral_code, inviter_code, main_balance, game_balance, total_bets, vip_level, is_agent, agent_id, manual_verification, referred_by, withdrawal_pin, bank_details, created_at')
     .eq('id', userId)
     .maybeSingle();
   if (error) console.error('fetchProfile error:', error);

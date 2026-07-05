@@ -13,16 +13,12 @@ import { useSearchParams } from "react-router-dom";
 import { useLanguage } from "../context/LanguageContext";
 import { supabase } from "../lib/supabase";
 
-// Helper to generate a unique 8‑character invite code
-const generateInviteCode = (): string => {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let code = "";
-  for (let i = 0; i < 8; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-};
-
+// NOTE: referral_code is the ONLY referral identifier on the frontend.
+// It is read from public.users.referral_code after login.
+// The database stores it and the frontend only displays/uses it.
+// 
+// invite_code is a SEPARATE column used internally by the database trigger.
+// DO NOT query invite_code for referral validation — use referral_code.
 interface AuthViewProps {
   onLoginSuccess: (
     phoneNumber: string,
@@ -97,6 +93,34 @@ export default function AuthView({
 
   const normalizePhone = (value: string) => value.replace(/\D/g, "");
 
+  const upsertOwnProfile = async ({
+    userId,
+    phoneNumber,
+    inviterCode,
+  }: {
+    userId: string;
+    phoneNumber: string;
+    inviterCode?: string | null;
+  }) => {
+    try {
+      const { error } = await supabase.from("users").upsert(
+        {
+          id: userId,
+          phone_number: phoneNumber,
+          inviter_code: inviterCode?.trim().toUpperCase() || null,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "id" }
+      );
+
+      if (error) {
+        console.warn("Temporary profile upsert failed:", error);
+      }
+    } catch (err) {
+      console.warn("Temporary profile upsert threw:", err);
+    }
+  };
+
   const normalizePakistanPhone = (value: string) => {
     const digits = normalizePhone(value);
     const normalized =
@@ -166,28 +190,84 @@ export default function AuthView({
       const email = `${normalizedPhone}@winwave.com`;
 
       if (mode === "register") {
-        const inviterCode = inviteCode.trim() || null;
+        const referralCode = inviteCode.trim() || null;
 
-        // Validate the invite code by checking if it exists in the users table
+        // Validate the referral code by checking if it exists in the users table
+        // Uses the security-definer RPC to bypass RLS for unauthenticated users
         let referrerUuid: string | null = null;
-        if (inviterCode) {
-          const normalizedCode = inviterCode.trim().toUpperCase();
-          const { data: referrerRow, error: refErr } = await supabase
-            .from("users")
-            .select("id")
-            .eq("invite_code", normalizedCode)
-            .maybeSingle();
+        if (referralCode) {
+          const normalizedCode = referralCode.trim().toUpperCase();
+          
+          // DEBUG: Log the exact referral code being validated
+          console.log('🔍 [AuthView] Validating referral code:', {
+            raw: referralCode,
+            trimmed: referralCode.trim(),
+            uppercased: normalizedCode,
+          });
 
-          if (refErr || !(referrerRow as any)?.id) {
+          // Try RPC first (SECURITY DEFINER, bypasses RLS, granted to anon)
+          // Validates against public.users.referral_code (the user-facing code)
+          let referrerId: string | null = null;
+          let rpcError: any = null;
+          
+          try {
+            const { data: refData, error: refErr } = await (supabase as any)
+              .rpc("validate_referral_code", { p_code: normalizedCode })
+              .maybeSingle();
+            
+            rpcError = refErr;
+            
+            console.log('🔍 [AuthView] RPC result:', { 
+              data: refData, 
+              error: refErr,
+              referrer_id: refData?.referrer_id,
+              referrer_phone: refData?.referrer_phone
+            });
+            
+            if (!refErr && refData?.referrer_id) {
+              referrerId = refData.referrer_id;
+            }
+          } catch (rpcErr) {
+            rpcError = rpcErr;
+            console.warn('🔍 [AuthView] RPC call failed, falling back to direct query:', rpcErr);
+          }
+
+          // Fallback: direct query if RPC failed or returned no data
+          if (!referrerId) {
+            console.log('🔍 [AuthView] Falling back to direct query on public.users.referral_code');
+            const { data: directData, error: directErr } = await supabase
+              .from('users')
+              .select('id')
+              .eq('referral_code', normalizedCode)
+              .maybeSingle();
+            
+            console.log('🔍 [AuthView] Direct query result:', { 
+              data: directData, 
+              error: directErr,
+              query: `SELECT id FROM public.users WHERE referral_code = '${normalizedCode}'`
+            });
+            
+            if (!directErr && (directData as any)?.id) {
+              referrerId = (directData as any).id;
+            } else if (directErr) {
+              console.error('🔍 [AuthView] Direct query error:', directErr);
+              console.error('🔍 [AuthView] Error code:', directErr.code);
+              console.error('🔍 [AuthView] Error message:', directErr.message);
+              console.error('🔍 [AuthView] Error details:', directErr.details);
+            }
+          }
+
+          if (!referrerId) {
+            console.error('🔍 [AuthView] Referral code validation FAILED for:', normalizedCode);
             setError(
               language === "EN"
-                ? `Invite code "${normalizedCode}" is invalid. Please check and try again.`
-                : `\u062f\u0639\u0648\u062a \u06a9\u0648\u0688 "${normalizedCode}" \u063a\u0644\u0637 \u06c1\u06d2\u06d4 \u062f\u0648\u0628\u0627\u0631\u06c1 \u0686\u06cc\u06a9 \u06a9\u0631\u06cc\u06ba\u06d4`
+                ? `Referral code "${normalizedCode}" is invalid. Please check and try again.`
+                : `\u0631\u06cc\u0641\u0631\u0644 \u06a9\u0648\u0688 "${normalizedCode}" \u06a9\u0644\u0637 \u06c1\u06d2\u06d4 \u062f\u0648\u0628\u0627\u0631\u06c1 \u0686\u06a9 \u06a9\u0631\u06cc\u06d2\u06d4`
             );
             setLoading(false);
             return;
           }
-          referrerUuid = (referrerRow as any).id;
+          referrerUuid = referrerId;
         }
 
         // 1. Sign up the user with Supabase Auth
@@ -197,7 +277,7 @@ export default function AuthView({
           options: {
             data: {
               phone_number: normalizedPhone,
-              inviter_code: inviterCode ? inviterCode.trim().toUpperCase() : null,
+              inviter_code: referralCode ? referralCode.trim().toUpperCase() : null,
               referrer_uuid: referrerUuid,
             },
           },
@@ -231,33 +311,16 @@ export default function AuthView({
           return;
         }
 
-        // 2. Generate a unique invite code for the new user
-        const newInviteCode = generateInviteCode();
+        // 2. Temporary launch-safe fallback: create the profile row after
+        //    signup succeeds instead of relying on the custom trigger.
+        //    The auth metadata still carries inviter_code/referrer_uuid.
+        await upsertOwnProfile({
+          userId: data.user?.id || "",
+          phoneNumber: normalizedPhone,
+          inviterCode: referralCode ? referralCode.trim().toUpperCase() : null,
+        });
 
-        // 3. Insert the user's details into public.users with proper referral binding
-        //    Force bind the validated invitation token to the user record
-        const { error: insertErr } = await (supabase as any)
-          .from("users")
-          .insert({
-            id: (data.user as any)?.id,
-            phone_number: normalizedPhone,
-            invite_code: newInviteCode,
-            inviter_code: inviterCode ? inviterCode.trim().toUpperCase() : null,
-            referred_by: inviterCode ? inviterCode.trim().toUpperCase() : null,
-            parent_agent_id: referrerUuid,
-            total_invitees: 0,
-            main_balance: 0,
-            status: "active",
-            is_active: true,
-          });
-
-        // Ignore duplicate key errors (23505) – row may have been created by a trigger
-        if (insertErr && insertErr.code !== "23505") {
-          console.error("Failed to insert user record:", insertErr);
-          // Continue anyway – the user is already authenticated
-        }
-
-        // 4. Store last used phone number
+        // 3. Store last used phone number
         localStorage.setItem("winwave_last_phone", normalizedPhone);
         setIsReferralLocked(false);
 
@@ -267,13 +330,13 @@ export default function AuthView({
             : "رجسٹریشن مکمل ہو گئی ہے!"
         );
 
-        // 5. Notify parent component, passing the new user’s invite_code
+        // 4. Notify parent component — the invite_code will be loaded
+        //    from the database by onAuthStateChange → refreshUserData
         onLoginSuccess(
           normalizedPhone,
           data.user?.id || normalizedPhone,
           {
             phone_number: normalizedPhone,
-            invite_code: newInviteCode,
           },
           undefined
         );
@@ -311,6 +374,12 @@ export default function AuthView({
         if (rememberPassword) {
           localStorage.setItem("winwave_last_phone", normalizedPhone);
         }
+
+        // Temporary launch-safe fallback: ensure the profile row exists after login.
+        await upsertOwnProfile({
+          userId: data.user?.id || "",
+          phoneNumber: normalizedPhone,
+        });
 
         // On login, we might want to fetch the user's invite_code from the DB
         // but we can also let the parent component handle that.

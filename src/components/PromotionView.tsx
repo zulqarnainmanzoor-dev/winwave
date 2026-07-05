@@ -15,7 +15,8 @@ import {
   Percent,
   History,
   UserCheck,
-  DollarSign
+  DollarSign,
+  AlertCircle
 } from "lucide-react";
 import { useLanguage } from "../context/LanguageContext";
 import { useUser } from "../context/UserContext";
@@ -47,75 +48,54 @@ export default function PromotionView() {
     direct_deposit_amount: null as number | null,
     team_deposit_amount: null as number | null,
   });
+  const [weeklyCommission, setWeeklyCommission] = useState(0);
+  const [commissionDetails, setCommissionDetails] = useState<Array<{ id: string; amount: number; created_at: string }>>([]);
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   // --- Fetch network stats using direct queries (replaces RPC) ---
   useEffect(() => {
     if (!uid) return;
 
     const fetchStats = async () => {
+      if (!uid) return;
+      setLoadingStats(true);
+      setStatsError(null);
+
       try {
-        console.log('📊 [PromotionView] Fetching network stats for uid:', uid);
-        
-        // Set loading state
-        setNetworkStats({
-          direct_count: null,
-          team_count: null,
-          direct_deposit_users: null,
-          team_deposit_users: null,
-          direct_deposit_amount: null,
-          team_deposit_amount: null,
-        });
-        
-        // 1. Direct invitees: users who have referred_by = current user's uid
         const { data: directUsers, error: dErr } = await (supabase as any)
           .from('users')
-          .select('id, invite_code, total_deposit, created_at')
+          .select('id, total_deposit, created_at')
           .eq('referred_by', uid);
 
         if (dErr) {
-          console.error('❌ [PromotionView] Error fetching direct users:', dErr);
-          setNetworkStats({
-            direct_count: 0,
-            team_count: 0,
-            direct_deposit_users: 0,
-            team_deposit_users: 0,
-            direct_deposit_amount: 0,
-            team_deposit_amount: 0,
-          });
-          return;
+          throw dErr;
         }
 
-        console.log('📊 [PromotionView] Direct users found:', directUsers?.length || 0);
-        console.log('📊 [PromotionView] First 5 direct users:', directUsers?.slice(0, 5));
+        const directUserIds = (directUsers || []).map((u: any) => u.id).filter(Boolean);
+        const directCount = directUserIds.length;
+        const directDepositUsers = (directUsers || []).filter((u: any) => Number(u.total_deposit || 0) > 0).length;
+        const directDepositAmount = (directUsers || []).reduce((sum: number, u: any) => sum + Number(u.total_deposit || 0), 0);
 
-        const directCount = directUsers?.length || 0;
-        const directDepositUsers = directUsers?.filter((u: any) => (u.total_deposit || 0) > 0).length || 0;
-        const directDepositAmount = directUsers?.reduce((sum: number, u: any) => sum + (u.total_deposit || 0), 0) || 0;
-
-        // 2. Team invitees (Level 2): users whose referred_by matches any direct user's id
-        const directUserIds = directUsers?.map((u: any) => u.id).filter(Boolean) || [];
-        console.log('📊 [PromotionView] Direct user IDs:', directUserIds);
-        
         let teamUsers: any[] = [];
-        if (directUserIds.length > 0) {
+        if (directUserIds.length) {
           const { data: teamData, error: tErr } = await (supabase as any)
             .from('users')
             .select('id, total_deposit, created_at')
             .in('referred_by', directUserIds);
-          
+
           if (tErr) {
-            console.error('❌ [PromotionView] Error fetching team users:', tErr);
+            console.warn('❌ [PromotionView] Error fetching team users:', tErr);
           } else {
             teamUsers = teamData || [];
-            console.log('📊 [PromotionView] Team users found:', teamUsers.length);
-            console.log('📊 [PromotionView] First 5 team users:', teamUsers.slice(0, 5));
           }
         }
-        const teamCount = teamUsers.length;
-        const teamDepositUsers = teamUsers.filter(u => (u.total_deposit || 0) > 0).length;
-        const teamDepositAmount = teamUsers.reduce((sum, u) => sum + (u.total_deposit || 0), 0);
 
-        console.log('📊 [PromotionView] Stats:', {
+        const teamCount = teamUsers.length;
+        const teamDepositUsers = teamUsers.filter((u) => Number(u.total_deposit || 0) > 0).length;
+        const teamDepositAmount = teamUsers.reduce((sum, u) => sum + Number(u.total_deposit || 0), 0);
+
+        setNetworkStats({
           direct_count: directCount,
           team_count: teamCount,
           direct_deposit_users: directDepositUsers,
@@ -124,21 +104,34 @@ export default function PromotionView() {
           team_deposit_amount: teamDepositAmount,
         });
 
-        // Update state with fetched data
-        const newStats = {
-          direct_count: directCount,
-          team_count: teamCount,
-          direct_deposit_users: directDepositUsers,
-          team_deposit_users: teamDepositUsers,
-          direct_deposit_amount: directDepositAmount,
-          team_deposit_amount: teamDepositAmount,
-        };
-        
-        console.log('📊 [PromotionView] Setting networkStats:', newStats);
-        setNetworkStats(newStats);
-        
-      } catch (err) {
+        const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const { data: weeklyRows, error: weeklyErr } = await (supabase as any)
+          .from('referral_commissions')
+          .select('amount, inviter_id')
+          .eq('inviter_id', uid)
+          .gte('created_at', oneWeekAgo.toISOString());
+
+        if (weeklyErr) {
+          throw weeklyErr;
+        }
+
+        const computedWeekly = (weeklyRows || []).reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0);
+        setWeeklyCommission(computedWeekly);
+
+        const { data: commissionRows, error: commissionErr } = await (supabase as any)
+          .from('referral_commissions')
+          .select('amount, inviter_id')
+          .eq('inviter_id', uid);
+
+        if (commissionErr) {
+          throw commissionErr;
+        }
+
+        const total = (commissionRows || []).reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0);
+        setTotalCommissions(total);
+      } catch (err: any) {
         console.error('❌ [PromotionView] Failed to fetch network stats:', err);
+        setStatsError(err?.message || 'Unable to load referral stats.');
         setNetworkStats({
           direct_count: 0,
           team_count: 0,
@@ -147,19 +140,14 @@ export default function PromotionView() {
           direct_deposit_amount: 0,
           team_deposit_amount: 0,
         });
+        setWeeklyCommission(0);
+        setTotalCommissions(0);
+      } finally {
+        setLoadingStats(false);
       }
     };
 
     fetchStats();
-
-    // --- Fetch total commission (keep RPC or replace with direct query) ---
-    // For now, keep RPC, but you can replace with a commission table query if needed.
-    (supabase.rpc as any)('get_referral_stats', { p_user_id: uid })
-      .then(({ data }: any) => {
-        if (data?.[0]) setTotalCommissions(Number(data[0].total_commission ?? 0));
-      })
-      .catch(console.error);
-
   }, [uid, referralCode]);
 
   // --- State for navigation and modals ---
@@ -447,6 +435,17 @@ export default function PromotionView() {
           <span className="text-4xl font-black text-[#ffa502] tracking-tight block">
             <AnimatedCounter value={totalCommissions} prefix="Rs " />
           </span>
+          {loadingStats ? (
+            <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-orange-500/20 bg-orange-500/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.2em] text-orange-300">
+              <div className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-orange-400 border-t-transparent" />
+              Loading referral stats
+            </div>
+          ) : statsError ? (
+            <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.2em] text-red-300">
+              <AlertCircle className="h-3.5 w-3.5" />
+              {statsError}
+            </div>
+          ) : null}
         </div>
 
         {/* Swipeable Carousel Panel Container */}
@@ -533,14 +532,10 @@ export default function PromotionView() {
           ) : (
             /* SLIDE 2: Commission summary & quick values */
             <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl p-5 shadow-[0_12px_24px_rgba(0,0,0,0.5)] animate-fade-in space-y-5">
-              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-3 text-center">
-                <p className="text-xs font-black text-red-400 uppercase tracking-wider">Stats are coming soon</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-center opacity-30 pointer-events-none">
+              <div className="grid grid-cols-2 gap-3 text-center">
                 <div className="bg-[#2C2C2E] border border-white/5 rounded-2xl py-3 px-1">
                   <span className="text-[#ffa502] text-sm font-black block">
-                    <AnimatedCounter value={0} prefix="Rs " />
+                    <AnimatedCounter value={weeklyCommission} prefix="Rs " />
                   </span>
                   <span className="text-[10px] font-bold text-gray-400 block uppercase mt-0.5">This Week</span>
                 </div>
@@ -552,7 +547,7 @@ export default function PromotionView() {
                 </div>
               </div>
 
-              <div className="border-t border-white/5 pt-4 grid grid-cols-2 text-center divide-x divide-white/5 opacity-30 pointer-events-none">
+              <div className="border-t border-white/5 pt-4 grid grid-cols-2 text-center divide-x divide-white/5">
                 <div>
                   <span className="text-xl font-black text-white block">
                     <AnimatedCounter value={networkStats.direct_count ?? 0} decimals={0} />

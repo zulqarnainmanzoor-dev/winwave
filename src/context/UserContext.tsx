@@ -25,9 +25,6 @@ export interface UserProfileSchema {
   amount?: number;
 }
 
-// Demo mode configuration
-const DEMO_PHONE_NUMBER = '923001234567';
-
 interface UserContextType {
   username: string;
   setUsername: (username: string) => void;
@@ -303,13 +300,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     return true;
   }, [mainWalletBalance, thirdPartyWalletBalance]);
 
-  const applyDemoMode = useCallback((phone: string) => {
-    if (phone === DEMO_PHONE_NUMBER) {
-      console.log('🎮 DEMO MODE ACTIVE - Setting balance to 1,000,000 for demo user:', phone);
-      setMainWalletBalanceState(1000000);
-    }
-  }, []);
-
   const login = async (
     phoneNumberValue: string,
     userId?: string,
@@ -332,7 +322,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     setLastLogin(new Date().toISOString());
     setIsLoggedIn(true);
 
-    applyDemoMode(profile?.phone_number || phoneNumberValue);
     void refreshUserData(userId);
   };
 
@@ -386,20 +375,47 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
 
     const { data, error } = await supabase
       .from('users')
-      .select('referral_code, phone_number, vip_level, total_bets, main_balance, game_balance, wagering_required, wagering_completed')
+      .select('referral_code, phone_number, vip_level, total_bets, main_balance, game_balance, wagering_required, wagering_completed, withdrawal_pin, bank_details, invite_code, referred_by')
       .eq('id', userId)
       .maybeSingle();
 
     if (error) {
       console.error('Failed to refresh profile data:', error);
     } else if (data) {
-      const userData = data as UserProfileSchema;
-      if (userData.referral_code) setReferralCode(userData.referral_code);
+      const userData = data as UserProfileSchema & { withdrawal_pin?: string; bank_details?: any; invite_code?: string; referred_by?: string };
+      
+      // Set referral code from either field
+      const refCode = userData.referral_code || userData.invite_code || '';
+      if (refCode) setReferralCode(refCode);
+      
       if (userData.phone_number) setPhoneNumber(userData.phone_number);
+      
+      // Load balances
       if (userData.main_balance != null) setMainWalletBalanceState(userData.main_balance);
       if (userData.game_balance != null) setThirdPartyWalletBalanceState(userData.game_balance);
+      
+      // Load wagering
       if (userData.wagering_required != null) setWageringRequired(userData.wagering_required);
       if (userData.wagering_completed != null) setWageringCompleted(userData.wagering_completed);
+      
+      // Load withdrawal PIN if it exists
+      if (userData.withdrawal_pin) {
+        setWithdrawalPasswordState(userData.withdrawal_pin);
+      }
+      
+      // Load bank/wallet details if they exist
+      if (userData.bank_details) {
+        const bd = userData.bank_details;
+        const accounts: any = { easypaisa: null, jazzcash: null };
+        if (bd.easypaisa?.account) {
+          accounts.easypaisa = { name: bd.easypaisa.name, account: bd.easypaisa.account, remarks: bd.easypaisa.remarks || '' };
+        }
+        if (bd.jazzcash?.account) {
+          accounts.jazzcash = { name: bd.jazzcash.name, account: bd.jazzcash.account, remarks: bd.jazzcash.remarks || '' };
+        }
+        setBoundAccountsState(accounts);
+      }
+      
       applyProfileData(userData as ProfileRow);
     }
 
@@ -500,6 +516,27 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(USER_SESSION_KEY, JSON.stringify(session));
   }, [avatar, boundAccounts, claimedDailyBonus, cumulativeWager, dailyWagerProgress, isLoggedIn, lastLogin, mainWalletBalance, musicEnabled, phoneNumber, referralCode, referralCount, selectedPaymentMethod, soundEnabled, thirdPartyWalletBalance, totalCommissions, uid, username, vipLevel, vipProgress, wageringCompleted, wageringRequired, withdrawalPassword]);
 
+  // On mount, if logged in, refresh user data from DB (handles page refresh)
+  useEffect(() => {
+    if (isLoggedIn && uid) {
+      void refreshUserData(uid);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Listen for auth state changes to load user data on login/refresh
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        const userId = session?.user?.id;
+        if (userId) {
+          setUid(userId);
+          void refreshUserData(userId);
+        }
+      }
+    });
+    return () => subscription?.unsubscribe();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!isLoggedIn || !uid) return;
     const channel = supabase
@@ -586,96 +623,12 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const registerUser = useCallback(async (phone: string, password: string, inviteCode?: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      let referrerId: string | null = null;
-      if (inviteCode) {
-        const { data: referrer, error: refError } = await supabase
-          .from('users')
-          .select('id')
-          .eq('referral_code', inviteCode)
-          .maybeSingle();
-
-        if (refError) {
-          console.error('Error validating invite code:', refError);
-          return { success: false, error: 'Error validating invite code' };
-        }
-        if (!referrer) {
-          return { success: false, error: 'Invalid invite code' };
-        }
-        referrerId = (referrer as any).id;
-      }
-
-      const { data: authData, error: signUpError } = await supabase.auth.signUp({
-        phone: phone,
-        password: password,
-      });
-
-      if (signUpError) {
-        console.error('Sign up error:', signUpError);
-        return { success: false, error: signUpError.message || 'Registration failed' };
-      }
-
-      const newUserId = authData.user?.id;
-      if (!newUserId) {
-        return { success: false, error: 'User ID not created' };
-      }
-
-      // Generate 9-digit numeric referral code
-      const generate9DigitCode = (): string => {
-        return Math.floor(100000000 + Math.random() * 900000000).toString();
-      };
-      const referralCodeNew = generate9DigitCode();
-
-      const insertData: any = {
-        id: newUserId,
-        phone_number: phone,
-        referral_code: referralCodeNew,
-        invite_code: referralCodeNew,
-        main_balance: 0,
-        game_balance: 0,
-        wagering_required: 0,
-        wagering_completed: 0,
-        vip_level: 0,
-        total_bets: 0,
-        referred_by: referrerId,
-      };
-
-      const { error: insertError } = await supabase
-        .from('users')
-        .insert(insertData);
-
-      if (insertError) {
-        console.error('Error inserting user profile:', insertError);
-        return { success: false, error: 'Failed to create user profile' };
-      }
-
-      if (referrerId) {
-        try {
-          await (supabase.rpc as any)('increment_referral_count', { user_id: referrerId });
-        } catch {
-          const { data: refData } = await (supabase as any)
-            .from('users')
-            .select('referral_count')
-            .eq('id', referrerId)
-            .single();
-          if (refData) {
-            const newCount = (refData.referral_count || 0) + 1;
-            await (supabase as any)
-              .from('users')
-              .update({ referral_count: newCount } as UserProfileSchema)
-              .eq('id', referrerId);
-          }
-        }
-      }
-
-      await login(phone, newUserId, { referral_code: referralCodeNew, phone_number: phone });
-      return { success: true };
-    } catch (err: any) {
-      console.error('Registration error:', err);
-      return { success: false, error: err.message || 'Registration failed' };
-    }
-  }, [login]);
+  const registerUser = useCallback(async (_phone: string, _password: string, _inviteCode?: string): Promise<{ success: boolean; error?: string }> => {
+    return {
+      success: false,
+      error: 'Registration is handled by the auth flow in AuthViewReact.',
+    };
+  }, []);
 
   const fetchReferrals = useCallback(async (): Promise<Array<{ id: string; phone: string; joined_at: string }>> => {
     if (!uid) return [];
@@ -700,8 +653,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     if (!uid) return 0;
     const { data, error } = await supabase
       .from('referral_commissions')
-      .select('amount')
-      .eq('user_id', uid);
+      .select('amount, inviter_id')
+      .eq('inviter_id', uid);
     if (error) {
       console.error('Error fetching commissions:', error);
       return 0;

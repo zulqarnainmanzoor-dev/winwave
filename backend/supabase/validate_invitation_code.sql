@@ -7,37 +7,41 @@ alter table public.users
 drop trigger if exists trg_validate_invitation_code on public.profiles;
 drop function if exists public.validate_invitation_code();
 
--- Step 3: Function to auto-generate a unique 6-digit referral_code on insert
+-- Step 3: Read referral/inviter codes from auth.users raw metadata only
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer
+set search_path = public
 as $$
 declare
-  new_code text;
-  code_exists boolean;
+  v_meta jsonb;
+  v_referral_code text;
+  v_inviter_code text;
 begin
-  -- Generate unique 6-digit referral_code
-  loop
-    new_code := lpad(floor(random() * 900000 + 100000)::text, 6, '0');
-    select exists(select 1 from public.users where referral_code = new_code) into code_exists;
-    exit when not code_exists;
-  end loop;
+  v_meta := coalesce(new.raw_user_meta_data, '{}'::jsonb);
+  v_referral_code := upper(trim(v_meta->>'referral_code'));
+  v_inviter_code := nullif(btrim(coalesce(v_meta->>'inviter_code', '')), '');
 
-  new.referral_code := new_code;
+  if v_referral_code is not null and btrim(v_referral_code) = '' then
+    v_referral_code := null;
+  end if;
 
-  -- inviter_code: only keep if it was explicitly passed, otherwise force NULL
-  if new.inviter_code is not null and btrim(new.inviter_code) = '' then
-    new.inviter_code := null;
+  if v_referral_code is not null or v_inviter_code is not null then
+    insert into public.users (id, referral_code, inviter_code)
+    values (new.id, v_referral_code, v_inviter_code)
+    on conflict (id) do update
+      set referral_code = excluded.referral_code,
+          inviter_code = excluded.inviter_code;
   end if;
 
   return new;
 end;
 $$;
 
--- Step 4: Attach trigger to public.users BEFORE INSERT
-drop trigger if exists trg_handle_new_user on public.users;
+-- Step 4: Attach trigger to auth.users AFTER INSERT
+drop trigger if exists trg_handle_new_user on auth.users;
 create trigger trg_handle_new_user
-before insert on public.users
+after insert on auth.users
 for each row
 execute function public.handle_new_user();

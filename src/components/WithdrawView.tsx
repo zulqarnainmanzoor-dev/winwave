@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ChevronLeft,
   HeadphonesIcon,
@@ -14,6 +14,7 @@ import {
   KeyRound
 } from "lucide-react";
 import { useUser, PAYMENT_LIMITS } from "../context/UserContext";
+import { supabase } from "../lib/supabase";
 
 export default function WithdrawView({
   onBack,
@@ -52,8 +53,45 @@ export default function WithdrawView({
   const [newWalletRemarks, setNewWalletRemarks] = useState("");
   const [withdrawRemarks, setWithdrawRemarks] = useState("");
 
-  const handleRefresh = () => {
+  useEffect(() => {
+    if (!uid) {
+      setWithdrawCounts({ easypaisa: 0, jazzcash: 0 });
+      return;
+    }
+
+    const loadCounts = async () => {
+      const startOfDay = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate())).toISOString();
+      const { data, error } = await (supabase as any)
+        .from('withdrawal_history')
+        .select('id, method')
+        .eq('user_id', uid)
+        .gte('created_at', startOfDay);
+
+      if (error) {
+        console.warn('Failed to load withdrawal counts', error);
+        return;
+      }
+
+      const counts = { easypaisa: 0, jazzcash: 0 };
+      (data || []).forEach((row: any) => {
+        const method = String(row.method || '').toLowerCase();
+        if (method === 'easypaisa' || method === 'jazzcash') {
+          counts[method as keyof typeof counts] += 1;
+        }
+      });
+      setWithdrawCounts(counts);
+    };
+
+    void loadCounts();
+  }, [uid]);
+
+  const handleRefresh = async () => {
     setIsRefreshing(true);
+    try {
+      await refreshUserData();
+    } catch (err) {
+      console.warn('Failed to refresh user data', err);
+    }
     setTimeout(() => setIsRefreshing(false), 1000);
   };
 
@@ -264,6 +302,10 @@ export default function WithdrawView({
       // Capture snapshot BEFORE clearing input fields — prevents "Rs NaN" in modal
       setLastSubmittedAmount(withdrawVal);
       setLastSubmittedRemarks(withdrawRemarks?.trim() || "");
+      setWithdrawCounts((prev) => ({
+        ...prev,
+        [selectedPaymentMethod]: prev[selectedPaymentMethod] + 1,
+      }));
       setAmount("");
       setWithdrawRemarks("");
       setShowSuccessModal(true);
@@ -573,7 +615,7 @@ export default function WithdrawView({
       </div>
 
       {/* Action Button — sits above BottomNav (68px) */}
-      <div className="fixed inset-x-0 bottom-[68px] px-4 pb-3 pt-2 bg-[#0A0A0B] z-30 pointer-events-none">
+      <div className="fixed inset-x-0 bottom-[68px] px-4 pb-3 pt-2 bg-transparent z-30 pointer-events-none">
         <div className="mx-auto w-full max-w-[450px] pointer-events-auto">
           <button
             onClick={handleWithdrawClick}

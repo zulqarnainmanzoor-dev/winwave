@@ -5,7 +5,7 @@
 
 // ── Webhook URL Construction ──────────────────────────────────
 // Production domain configuration
-const PRODUCTION_DOMAIN = "https://winwave-official.vercel.app";
+const PRODUCTION_DOMAIN = "https://winwave-official.vercel.app/#/";
 const DEV_WEBHOOK_BASE = process.env.DEV_WEBHOOK_BASE || "";  // ngrok URL in dev only
 const PROD_WEBHOOK_BASE = process.env.PROD_WEBHOOK_BASE || ""; // custom domain override
 

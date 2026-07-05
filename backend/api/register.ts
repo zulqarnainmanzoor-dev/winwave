@@ -165,87 +165,15 @@ router.post('/register', async (req, res) => {
        return res.status(409).json({ ok: false, error: 'Phone already registered' });
     }
 
-    // 1. Auth Creation
-    const serviceRoleAvailable = isServiceRoleKey();
-    let authData: any;
-    let authError: any;
+    // Registration is now handled by the client auth flow in AuthViewReact.
+    // The backend route only validates referral and abuse-state concerns.
+    await logSecurityEvent('register_deferred', cleanPhone, context, { referredBy: referrerId });
 
-    if (serviceRoleAvailable) {
-      ({ data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-        email: userEmail,
-        password,
-        user_metadata: { phone: cleanPhone, phone_number: cleanPhone }  // both keys for trigger compatibility
-      } as any));
-    } else {
-      ({ data: authData, error: authError } = await supabaseAdmin.auth.signUp({
-        email: userEmail,
-        password,
-        options: { data: { phone: cleanPhone, phone_number: cleanPhone } }
-      }));
-    }
-
-    if (authError) return res.status(400).json({ ok: false, error: authError.message });
-
-    const userId = authData?.user?.id || (authData as any)?.id;
-    if (!userId) return res.status(500).json({ ok: false, error: 'Signup failed: No User ID' });
-
-    // 2. Generate a safe invite/referral code and bind it to the profile record
-    const referral_code = await generateInviteCode();
-    console.log('📋 Generated invite/referral code for new user:', referral_code);
-
-    // 3. Insert into public.users — use upsert with on conflict do nothing because
-    //    the handle_new_user trigger on auth.users may have already created the row.
-    //    If it hasn't (e.g. trigger not installed or failed silently), we create it now.
-    const { error: userInsertError } = await supabaseAdmin
-      .from('users')
-      .upsert({
-        id: userId,
-        phone_number: cleanPhone,
-        referral_code,
-        invite_code: referral_code,
-        referred_by: referrerId,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      } as any, { onConflict: 'id', ignoreDuplicates: false });
-
-    if (userInsertError) {
-      console.error('❌ User Upsert Error:', {
-        message: userInsertError?.message,
-        details: userInsertError?.details,
-        hint: userInsertError?.hint,
-        code: userInsertError?.code,
-      });
-      return res.status(500).json({ ok: false, error: 'User record creation failed', details: userInsertError?.message || 'Unknown insert error' });
-    }
-
-    // 4. Create wallet record with a safe fallback if the schema is stricter than expected
-    try {
-      const { error: walletError } = await supabaseAdmin.from('wallets').insert({
-        user_id: userId,
-        main_balance: 0,
-        game_balance: 0,
-      } as any);
-
-      if (walletError) {
-        console.warn('⚠️ Wallet insert warning:', {
-          message: walletError?.message,
-          details: walletError?.details,
-          code: walletError?.code,
-        });
-      }
-    } catch (walletErr: any) {
-      console.warn('⚠️ Wallet insert threw:', walletErr?.message || walletErr);
-    }
-
-    // Log successful registration
-    console.log('✅ Registration complete for:', cleanPhone, 'with referral_code:', referral_code, 'referred_by:', referrerId);
-    await logSecurityEvent('register_success', cleanPhone, context, { userId, referralCode: referral_code, referredBy: referrerId });
-
-    return res.json({ 
-      ok: true, 
-      userId,
-      referral_code,
-      referred_by: referrerId 
+    return res.status(202).json({
+      ok: true,
+      message: 'Registration is handled by the client auth flow.',
+      phone: cleanPhone,
+      referred_by: referrerId,
     });
 
   } catch (err: any) {

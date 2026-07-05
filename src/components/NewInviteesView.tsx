@@ -1,54 +1,90 @@
-import React, { useState, useEffect } from "react";
-import { ChevronLeft } from "lucide-react";
-import { supabase } from "../lib/supabase";
+import React, { useEffect, useState } from "react";
+import { ChevronLeft, AlertCircle, ChevronRight } from "lucide-react";
+import { supabase } from "../lib/supabaseClient";
 import { useUser } from "../context/UserContext";
 
 interface Invitee {
   id: string;
   phone_number: string | null;
-  invite_code: string | null;
+  referral_code?: string | null;
+  invite_code?: string | null;
   created_at: string;
 }
+
+const PAGE_SIZE = 20;
 
 export default function NewInviteesView({ onBack }: { onBack: () => void }) {
   const { uid } = useUser();
   const [activeTab, setActiveTab] = useState<"today" | "yesterday" | "month">("today");
   const [invitees, setInvitees] = useState<Invitee[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
 
   useEffect(() => {
-    if (!uid) return;
-    setLoading(true);
+    if (!uid) {
+      setInvitees([]);
+      setError(null);
+      setHasMore(false);
+      setPage(0);
+      return;
+    }
 
+    let cancelled = false;
     const now = new Date();
-    const todayStart  = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-    const todayEnd    = new Date(todayStart.getTime() + 86400000);
-    const yestStart   = new Date(todayStart.getTime() - 86400000);
-    const monthStart  = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const todayEnd = new Date(todayStart.getTime() + 86400000);
+    const yestStart = new Date(todayStart.getTime() - 86400000);
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-    let from: string, to: string;
+    let from: string;
+    let to: string;
     if (activeTab === "today") {
-      from = todayStart.toISOString(); to = todayEnd.toISOString();
+      from = todayStart.toISOString();
+      to = todayEnd.toISOString();
     } else if (activeTab === "yesterday") {
-      from = yestStart.toISOString();  to = todayStart.toISOString();
+      from = yestStart.toISOString();
+      to = todayStart.toISOString();
     } else {
-      from = monthStart.toISOString(); to = todayEnd.toISOString();
+      from = monthStart.toISOString();
+      to = todayEnd.toISOString();
     }
 
-supabase
-  .from("profiles") // Yahan 'users' se 'profiles' karo
-  .select("id, phone_number, invite_code, created_at")
-  .eq("inviter_code", uid) // Agar column name 'invited_by' hai to yahan change karo
-  .gte("created_at", from)
-  .lt("created_at", to)
-  .order("created_at", { ascending: false })
-  .then(({ data, error }) => {
-    if (error) {
-      console.error("Supabase Error:", error); // Error dekhna zaroori hai
-    }
-    setInvitees((data as Invitee[]) ?? []);
-    setLoading(false);
-  });
+    const fetchInvitees = async () => {
+      setLoading(true);
+      setError(null);
+      const offset = page * PAGE_SIZE;
+      const { data, error: queryError, count } = await (supabase as any)
+        .from("users")
+        .select("id, phone_number, referral_code, invite_code, created_at", { count: "exact" })
+        .eq("referred_by", uid)
+        .gte("created_at", from)
+        .lt("created_at", to)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + PAGE_SIZE - 1);
+
+      if (cancelled) return;
+
+      if (queryError) {
+        console.error("Supabase Error:", queryError);
+        setError(queryError.message || "Unable to load invitees right now.");
+        setInvitees([]);
+        setHasMore(false);
+      } else {
+        const rows = (data as Invitee[]) ?? [];
+        setInvitees(page === 0 ? rows : (prev) => [...prev, ...rows]);
+        setHasMore((count ?? 0) > offset + rows.length);
+      }
+
+      setLoading(false);
+    };
+
+    void fetchInvitees();
+    return () => {
+      cancelled = true;
+    };
+  }, [uid, activeTab, page]);
 
   const maskPhone = (p: string | null) =>
     p ? p.slice(0, 4) + "****" + p.slice(-2) : "---";
@@ -57,9 +93,9 @@ supabase
     new Date(iso).toLocaleDateString("en-PK", { day: "2-digit", month: "short", year: "numeric" });
 
   const tabs = [
-    { key: "today",     label: "Today" },
+    { key: "today", label: "Today" },
     { key: "yesterday", label: "Yesterday" },
-    { key: "month",     label: "This month" },
+    { key: "month", label: "This month" },
   ] as const;
 
   return (
@@ -76,7 +112,10 @@ supabase
           {tabs.map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => setActiveTab(key)}
+              onClick={() => {
+                setActiveTab(key);
+                setPage(0);
+              }}
               className={`flex-1 py-2.5 px-3 rounded-full text-xs font-black tracking-wider text-center transition-all cursor-pointer ${
                 activeTab === key
                   ? "bg-gradient-to-r from-orange-500 to-amber-500 text-black shadow-lg shadow-orange-500/10"
@@ -88,57 +127,67 @@ supabase
           ))}
         </div>
 
-        {loading ? (
+        {loading && page === 0 ? (
           <div className="flex justify-center py-16">
             <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : (
-          <>
-            {activeTab !== "yesterday" && (
-              <div className="bg-red-500/10 border border-red-500/20 rounded-2xl p-3 text-center mb-3">
-                <div className="flex items-center justify-center gap-2">
-                  <span className="w-2 h-2 bg-red-400 rounded-full inline-block" />
-                  <p className="text-xs font-black text-red-400 uppercase tracking-wider">Stats are coming soon</p>
-                </div>
+        ) : error ? (
+          <div className="rounded-3xl border border-red-500/20 bg-red-500/10 p-4 text-center text-sm text-red-300">
+            {error}
+          </div>
+        ) : invitees.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 space-y-4">
+            <div className="relative w-28 h-28 select-none flex items-center justify-center">
+              <div className="absolute w-16 h-20 bg-[#1C1C1E]/85 rounded-2xl border border-white/10 rotate-[-12deg] shadow-lg flex flex-col justify-end p-3">
+                <div className="w-10 h-1.5 bg-zinc-800 rounded-full mb-1.5" />
+                <div className="w-8 h-1.5 bg-zinc-800 rounded-full" />
               </div>
-            )}
-
-            <div className={activeTab === "yesterday" ? "" : "opacity-30 pointer-events-none blur-[1.5px]"}>
-              {invitees.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 space-y-4">
-                  <div className="relative w-28 h-28 select-none flex items-center justify-center">
-                    <div className="absolute w-16 h-20 bg-[#1C1C1E]/85 rounded-2xl border border-white/10 rotate-[-12deg] shadow-lg flex flex-col justify-end p-3">
-                      <div className="w-10 h-1.5 bg-zinc-800 rounded-full mb-1.5" />
-                      <div className="w-8 h-1.5 bg-zinc-800 rounded-full" />
-                    </div>
-                    <div className="absolute w-16 h-20 bg-[#2C2C2E]/95 rounded-2xl border border-white/20 translate-x-3.5 translate-y-1 rotate-[6deg] shadow-2xl flex flex-col p-3 justify-center gap-2.5">
-                      <div className="w-11 h-1.5 bg-zinc-700/60 rounded-full" />
-                      <div className="w-9 h-1.5 bg-zinc-700/60 rounded-full" />
-                      <div className="w-10 h-1.5 bg-zinc-700/60 rounded-full" />
-                    </div>
-                  </div>
-                  <span className="text-xs font-black text-gray-500 uppercase tracking-widest">No Records</span>
-                </div>
-              ) : (
-                <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden">
-                  <div className="grid grid-cols-3 bg-[#2C2C2E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">
-                    <span>Phone</span>
-                    <span>Invite Code</span>
-                    <span>Joined</span>
-                  </div>
-                  <div className="divide-y divide-white/5">
-                    {invitees.map((u) => (
-                      <div key={u.id} className="grid grid-cols-3 p-3 text-xs text-center items-center">
-                        <span className="font-mono text-white font-bold">{maskPhone(u.phone_number)}</span>
-                        <span className="text-[#ffa502] font-bold">{u.invite_code ?? "—"}</span>
-                        <span className="text-gray-400">{fmtDate(u.created_at)}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <div className="absolute w-16 h-20 bg-[#2C2C2E]/95 rounded-2xl border border-white/20 translate-x-3.5 translate-y-1 rotate-[6deg] shadow-2xl flex flex-col p-3 justify-center gap-2.5">
+                <div className="w-11 h-1.5 bg-zinc-700/60 rounded-full" />
+                <div className="w-9 h-1.5 bg-zinc-700/60 rounded-full" />
+                <div className="w-10 h-1.5 bg-zinc-700/60 rounded-full" />
+              </div>
             </div>
-          </>
+            <div className="text-center">
+              <p className="text-xs font-black text-gray-500 uppercase tracking-widest">No Records</p>
+              <p className="mt-1 text-[11px] text-gray-600">Your direct invitees will appear here once they register.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden">
+              <div className="grid grid-cols-3 bg-[#2C2C2E] p-3 text-[10px] font-black uppercase text-gray-400 tracking-wider text-center">
+                <span>Phone</span>
+                <span>Invite Code</span>
+                <span>Joined</span>
+              </div>
+              <div className="divide-y divide-white/5">
+                {invitees.map((u) => (
+                  <div key={u.id} className="grid grid-cols-3 p-3 text-xs text-center items-center">
+                    <span className="font-mono text-white font-bold">{maskPhone(u.phone_number)}</span>
+                    <span className="text-[#ffa502] font-bold">{u.invite_code || u.referral_code || "—"}</span>
+                    <span className="text-gray-400">{fmtDate(u.created_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {hasMore ? (
+              <button
+                onClick={() => setPage((prev) => prev + 1)}
+                className="flex w-full items-center justify-center gap-2 rounded-full border border-orange-500/20 bg-orange-500/10 px-4 py-3 text-sm font-black uppercase tracking-[0.2em] text-orange-300"
+              >
+                Load more
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            ) : null}
+
+            {loading && page > 0 ? (
+              <div className="flex justify-center py-2">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-orange-500 border-t-transparent" />
+              </div>
+            ) : null}
+          </div>
         )}
       </div>
     </div>

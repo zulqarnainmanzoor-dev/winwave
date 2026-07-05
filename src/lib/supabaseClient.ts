@@ -165,9 +165,9 @@ export interface Database {
         Update: { id?: string; user_id?: string; amount?: number; status?: string; gateway_ref?: string | null };
       };
       referral_commissions: {
-        Row: { id: string; user_id: string; amount: number; created_at: string };
-        Insert: { id?: string; user_id: string; amount: number; created_at?: string };
-        Update: { id?: string; user_id?: string; amount?: number };
+        Row: { id: string; inviter_id: string; amount: number; created_at: string };
+        Insert: { id?: string; inviter_id: string; amount: number; created_at?: string };
+        Update: { id?: string; inviter_id?: string; amount?: number };
       };
       registration_attempts: {
         Row: { id: string; ip: string; phone_number: string; created_at: string };
