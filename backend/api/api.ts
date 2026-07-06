@@ -214,5 +214,10 @@ router.post('/game-rounds/force-outcome', async (req, res) => {
   }
 });
 
+// Catch-all 404 handler
+router.use((req, res) => {
+  res.status(404).json({ error: 'Route not found', path: req.path, method: req.method });
+});
+
 export default router;
 

@@ -30,8 +30,12 @@ router.post('/', async (req, res) => {
     const body = req.body;
     const { withdrawal_id, adminSecretToken } = body;
 
+    console.log('[payout] Request received:', { withdrawal_id, hasToken: !!adminSecretToken });
+    console.log('[payout] Env check - ADMIN_SECRET_TOKEN:', !!ADMIN_SECRET_TOKEN);
+
     // 1. Enforce rigorous security handshake checking
     if (!withdrawal_id || !ADMIN_SECRET_TOKEN || adminSecretToken !== ADMIN_SECRET_TOKEN) {
+      console.log('[payout] Auth failed - withdrawal_id:', !!withdrawal_id, 'token match:', adminSecretToken === ADMIN_SECRET_TOKEN);
       return res.status(401).json({ success: false, error: "Unauthorized endpoint execution." });
     }
 

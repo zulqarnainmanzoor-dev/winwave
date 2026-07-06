@@ -21,6 +21,17 @@ app.use(cors({
 
 app.use(express.json());
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Error handling middleware
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[API Error]', err);
+  res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+});
+
 app.get(`/admin/${adminSecret}`, (req, res) => {
   if (!fs.existsSync(adminIndexPath)) {
     return res.status(404).send('Admin UI not built yet');
