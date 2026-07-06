@@ -4,8 +4,18 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import apiRouter from '../backend/api/api';
-import adminRouter from '../backend/admin/admin';
+
+let apiRouter: any = null;
+let adminRouter: any = null;
+let importError: any = null;
+
+try {
+  apiRouter = require('../backend/api/api').default;
+  adminRouter = require('../backend/admin/admin').default;
+} catch (err: any) {
+  importError = err;
+  console.error('[Handler] Import error:', err?.message);
+}
 
 const app = express();
 const adminSecret = process.env.ADMIN_SECRET_ID || '3399944';
@@ -30,7 +40,8 @@ app.get('/api/test', (req, res) => {
       supabaseUrl: process.env.VITE_SUPABASE_URL ? 'SET' : 'MISSING',
       serviceRoleKey: process.env.SERVICE_ROLE_KEY ? 'SET' : 'MISSING',
       anonKey: process.env.VITE_SUPABASE_ANON_KEY ? 'SET' : 'MISSING'
-    }
+    },
+    importError: importError ? importError.message : null
   });
 });
 
@@ -60,8 +71,12 @@ app.get('/admin/login', (req, res) => {
   res.type('html').send(fs.readFileSync(adminIndexPath, 'utf-8'));
 });
 
-app.use('/api', apiRouter);
-app.use(`/api/admin/${adminSecret}`, adminRouter);
+if (apiRouter) {
+  app.use('/api', apiRouter);
+}
+if (adminRouter) {
+  app.use(`/api/admin/${adminSecret}`, adminRouter);
+}
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   return app(req as any, res as any);
