@@ -8,10 +8,10 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api"
+      "destination": "/backend/api/index.ts?path=/$1"
     },
     {
-      "source": "/((?!api).*)",
+      "source": "/((?!api|_next|static).*)",
       "destination": "/index.html"
     }
   ]
