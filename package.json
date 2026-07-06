@@ -9,6 +9,7 @@
     "serve:server": "tsx server.ts",
     "Serve:server": "tsx server.ts",
     "start:server": "npm run Serve:server",
+    "wingo:server": "tsx wingo-server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
