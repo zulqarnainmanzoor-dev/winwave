@@ -39,12 +39,6 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Error handling middleware
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('[API Error]', err);
-  res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
-});
-
 app.get(`/admin/${adminSecret}`, (req, res) => {
   if (!fs.existsSync(adminIndexPath)) {
     return res.status(404).send('Admin UI not built yet');
@@ -62,6 +56,12 @@ app.get('/admin/login', (req, res) => {
 
 app.use('/api', apiRouter);
 app.use(`/api/admin/${adminSecret}`, adminRouter);
+
+// Error handling middleware - MUST be last
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[Global Error Handler]', err);
+  res.status(500).json({ success: false, error: err?.message || 'Internal server error' });
+});
 
 export default function handler(req: VercelRequest, res: VercelResponse) {
   return app(req as any, res as any);
