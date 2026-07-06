@@ -13,19 +13,18 @@ import webhookTestRouter from './webhook-test';
 
 // Startup log: canonical public webhook endpoint for PKPay deposit
 console.log("PKPay Deposit Webhook:", "/api/webhook/deposit");
-console.log("PKPay Payout Webhook:", "/api/webhook/payout");
+console.log("PKPay Payout Webhook:", "/api/payout");
 console.log("Webhook Test Endpoint:", "/api/webhook/test");
 
 const router = Router();
 
-router.use('/', registerRouter);
+// SPECIFIC ROUTES FIRST (before catch-all registerRouter)
 router.use('/members', membersRouter);
-// Webhook routes (canonical)
 router.post('/webhook/deposit', depositWebhookHandler);
 router.use('/payout', payoutRouter);
 router.use('/webhook/test', webhookTestRouter);
 
-// Legacy compatibility alias (forward internally; do not maintain separate implementation)
+// Legacy compatibility alias
 router.post('/webhooks/pkpay', (req, res, next) => {
   req.url = '/webhook/deposit';
   return depositWebhookHandler(req, res, next);
@@ -34,8 +33,6 @@ router.post('/webhooks/pkpay', (req, res, next) => {
 router.use('/wallet', walletRouter);
 router.use('/withdraw', withdrawRouter);
 router.use('/wingo', wingoRouter);
-
-// Optimized referral stats endpoints
 router.use('/referral', referralStatsRouter);
 
 router.post('/login', async (req, res) => {
@@ -47,7 +44,6 @@ router.post('/login', async (req, res) => {
 
   const normalizedPhone = String(phone).replace(/\D/g, '');
 
-  // Demo account shortcut for local testing and easy access
   if (normalizedPhone === '1234567890' && password === 'demo.user') {
     await logSecurityEvent('login_success', normalizedPhone, context, { demoAccount: true });
     return res.json({ ok: true, user: { id: 'demo-user', email: 'user_1234567890@winwave.com', phone_number: normalizedPhone }, wallet: { main_balance: 150, wagering_required: 0 } });
@@ -98,27 +94,20 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Example API endpoint
 router.get('/status', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Example POST request
 router.post('/user-data', async (req, res) => {
   const { userId } = req.body;
   res.json({ message: 'User data requested' });
 });
 
-/**
- * Reset 'My History' for users inactive for > 7 days
- * This function can be called by a cron job or admin trigger
- */
 export const cleanupInactiveUserHistory = async () => {
   try {
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    // 1. Identify inactive users
     const { data: inactiveUsers, error: userError } = await supabase
       .from('users')
       .select('id')
@@ -129,7 +118,6 @@ export const cleanupInactiveUserHistory = async () => {
     if (inactiveUsers && inactiveUsers.length > 0) {
       const userIds = inactiveUsers.map(u => u.id);
 
-      // 2. Delete history for these users
       const { error: deleteError } = await supabase
         .from('bets')
         .delete()
@@ -147,7 +135,6 @@ export const cleanupInactiveUserHistory = async () => {
   }
 };
 
-// Admin endpoint to trigger manual cleanup
 router.post('/admin/cleanup-history', async (req, res) => {
   try {
     const count = await cleanupInactiveUserHistory();
@@ -214,10 +201,12 @@ router.post('/game-rounds/force-outcome', async (req, res) => {
   }
 });
 
-// Catch-all 404 handler
+// CATCH-ALL ROUTES LAST (registerRouter handles auth/register)
+router.use('/', registerRouter);
+
+// Final 404 handler
 router.use((req, res) => {
   res.status(404).json({ error: 'Route not found', path: req.path, method: req.method });
 });
 
 export default router;
-
