@@ -22,7 +22,7 @@ router.use('/', registerRouter);
 router.use('/members', membersRouter);
 // Webhook routes (canonical)
 router.post('/webhook/deposit', depositWebhookHandler);
-router.post('/webhook/payout', payoutRouter);
+router.use('/payout', payoutRouter);
 router.use('/webhook/test', webhookTestRouter);
 
 // Legacy compatibility alias (forward internally; do not maintain separate implementation)
@@ -34,7 +34,6 @@ router.post('/webhooks/pkpay', (req, res, next) => {
 router.use('/wallet', walletRouter);
 router.use('/withdraw', withdrawRouter);
 router.use('/wingo', wingoRouter);
-router.use('/payout', payoutRouter);
 
 // Optimized referral stats endpoints
 router.use('/referral', referralStatsRouter);
