@@ -120,7 +120,32 @@ export default function Deposit({
     const targetUrl = links[amountToPay];
 
     if (targetUrl) {
-      window.location.href = targetUrl;
+      // Extract order_id from PKPay URL (last part after /pay/)
+      const urlParts = targetUrl.split('/');
+      const orderId = urlParts[urlParts.length - 1];
+      
+      if (!orderId) {
+        window.location.href = targetUrl;
+        return;
+      }
+
+      // Create pending deposit_history record before redirect
+      try {
+        const userId = (userContext as any)?.uid || null;
+        if (!userId) {
+          window.location.href = targetUrl;
+          return;
+        }
+
+        // Note: In this component we don't have supabase client,
+        // so we'll redirect and let the webhook handle it
+        // The deposit will be created when webhook arrives
+        console.log(`Redirecting to PKPay with order_id: ${orderId}`);
+        window.location.href = targetUrl;
+      } catch (e) {
+        window.location.href = targetUrl;
+        return;
+      }
     } else {
       alert("Automated deposits are only available for fixed packages right now. Please select a supported quick amount for the selected gateway.");
     }

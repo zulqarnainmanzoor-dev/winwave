@@ -1,64 +1,89 @@
 /**
  * PKPay Payment Gateway Integration Helper
- * Provides shared utilities for PKPay API calls and webhook URL construction.
+ *
+ * Used by:
+ * - Deposit API
+ * - Payout API
+ * - PKPay Merchant configuration
+ *
+ * Single source of truth for webhook URLs.
  */
 
-// ── Webhook URL Construction ──────────────────────────────────
-// Production domain configuration
-const PRODUCTION_DOMAIN = "https://winwave-official.vercel.app/#/";
-const DEV_WEBHOOK_BASE = process.env.DEV_WEBHOOK_BASE || "";  // ngrok URL in dev only
-const PROD_WEBHOOK_BASE = process.env.PROD_WEBHOOK_BASE || ""; // custom domain override
+// ----------------------------------------------------
+// Production Domain (NO #/)
+// ----------------------------------------------------
+const PRODUCTION_DOMAIN = "https://winclub-officiall.vercel.app";
 
-/**
- * Returns the publicly accessible webhook URL for PKPay to call.
- * 
- * Resolution order:
- * 1. DEV_WEBHOOK_BASE - if set (ngrok URL for local testing ONLY)
- * 2. VERCEL_URL - automatically set by Vercel in production
- * 3. PROD_WEBHOOK_BASE - custom domain override
- * 4. PRODUCTION_DOMAIN - hardcoded production fallback
- */
+// Optional overrides
+const DEV_WEBHOOK_BASE = process.env.DEV_WEBHOOK_BASE || "";
+const PROD_WEBHOOK_BASE = process.env.PROD_WEBHOOK_BASE || "";
+
+// ----------------------------------------------------
+// Deposit Webhook
+// ----------------------------------------------------
 export function getWebhookUrl(): string {
-  // Priority 1: Dev webhook base (ngrok tunnel) - ONLY for local development
+
+  // Local development (Ngrok)
   if (DEV_WEBHOOK_BASE) {
-    return `${DEV_WEBHOOK_BASE}/api/webhooks/payout`;
+    return `${DEV_WEBHOOK_BASE}/api/webhook/deposit`;
   }
 
-  // Priority 2: Vercel deployment URL (set automatically by Vercel)
+  // Current Vercel deployment
   const vercelUrl = process.env.VERCEL_URL;
+
   if (vercelUrl) {
-    return `https://${vercelUrl}/api/webhooks/payout`;
+    return `https://${vercelUrl}/api/webhook/deposit`;
   }
 
-  // Priority 3: Production webhook base override
+  // Custom production override
   if (PROD_WEBHOOK_BASE) {
-    return `${PROD_WEBHOOK_BASE}/api/webhooks/payout`;
+    return `${PROD_WEBHOOK_BASE}/api/webhook/deposit`;
   }
 
-  // Priority 4: Production domain (hardcoded fallback for production)
-  return `${PRODUCTION_DOMAIN}/api/webhooks/payout`;
+  // Final production fallback
+  return `${PRODUCTION_DOMAIN}/api/webhook/deposit`;
 }
 
-/**
- * Returns the PKPay-specific webhook URL that should be registered
- * in the PKPay merchant dashboard.
- * 
- * Call this to verify the URL is correct before making API calls.
- */
+// ----------------------------------------------------
+// Recommended URL shown in logs / admin
+// ----------------------------------------------------
 export function getRecommendedWebhookUrl(): string {
+
+  if (DEV_WEBHOOK_BASE) {
+    return `${DEV_WEBHOOK_BASE}/api/webhook/deposit`;
+  }
+
   const vercelUrl = process.env.VERCEL_URL;
-  const devBase = process.env.DEV_WEBHOOK_BASE;
-  
-  // Development with ngrok
-  if (devBase) {
-    return `${devBase}/api/webhooks/payout`;
-  }
-  
-  // Production: Use VERCEL_URL if available, otherwise use hardcoded production domain
+
   if (vercelUrl) {
-    return `https://${vercelUrl}/api/webhooks/payout`;
+    return `https://${vercelUrl}/api/webhook/deposit`;
   }
-  
-  // Production fallback - always return production domain
-  return `${PRODUCTION_DOMAIN}/api/webhooks/payout`;
+
+  if (PROD_WEBHOOK_BASE) {
+    return `${PROD_WEBHOOK_BASE}/api/webhook/deposit`;
+  }
+
+  return `${PRODUCTION_DOMAIN}/api/webhook/deposit`;
+}
+
+// ----------------------------------------------------
+// Future Payout Webhook (for later use)
+// ----------------------------------------------------
+export function getPayoutWebhookUrl(): string {
+
+  if (DEV_WEBHOOK_BASE) {
+    return `${DEV_WEBHOOK_BASE}/api/webhook/payout`;
+  }
+
+  const vercelUrl = process.env.VERCEL_URL;
+
+  if (vercelUrl) {
+    return `https://${vercelUrl}/api/webhook/payout`;
+  }
+
+  if (PROD_WEBHOOK_BASE) {
+    return `${PROD_WEBHOOK_BASE}/api/webhook/payout`;
+  }
+
+  return `${PRODUCTION_DOMAIN}/api/webhook/payout`;
 }

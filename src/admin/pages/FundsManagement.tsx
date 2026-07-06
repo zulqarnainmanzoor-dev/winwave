@@ -71,16 +71,17 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
       if (type === "withdraw") {
         const { data, error: e } = await sb
           .from("withdrawal_history")
-          .select("id, user_id, amount, method, account_name, account_number, status, gateway_ref, reason, remarks, created_at")
+          .select("id, user_id, amount, method, account_name, account_no, bank_name, status, gateway_ref, reason, remarks, created_at")
           .order("created_at", { ascending: false })
           .limit(500);
         if (e) throw e;
-        rows = (data || []).map((r: any) => ({ ...r, bank_name: r.method }));
+        rows = data || [];
       } else {
         const { data, error: e } = await sb
-          .from("transactions")
-          .select("id, user_id, amount, status, gateway_ref, created_at, type")
-          .eq("type", "deposit")
+          .from("deposit_history")
+          .select(
+            "id, user_id, amount, status, gateway_ref, created_at, updated_at, method, order_id, gateway_ref, remarks"
+          )
           .order("created_at", { ascending: false })
           .limit(500);
         if (e) throw e;
@@ -114,9 +115,9 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           invite_code:  u.invite_code,
           is_agent:     u.is_agent,
           amount:       Number(row.amount ?? 0),
-          method:       row.bank_name || (row.gateway_ref ? "Payment Gateway" : "Manual"),
+          method:       row.method || row.bank_name || "Manual",
           account_name: row.account_name || "—",
-          account_number: row.account_number || row.gateway_ref || "—",
+          account_number: row.account_number || (row.order_id ? String(row.order_id) : (row.gateway_ref || "—")),
           status:       (row.status as RequestStatus) || "pending",
           type,
           label:        type === "deposit" ? "Deposit" : u.is_agent ? "Agent Salary" : "Withdrawal",
@@ -180,11 +181,17 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
 
   // Filter
   useEffect(() => {
-    let r = requests;
+      let r = requests;
     if (statusFilter !== "all") r = r.filter(x => x.status === statusFilter || (statusFilter === "approved" && x.status === "completed"));
     if (search.trim()) {
       const q = search.toLowerCase();
-      r = r.filter(x => x.id.toLowerCase().includes(q) || x.phone.includes(q) || x.invite_code.includes(q));
+      r = r.filter(x =>
+        String(x.userId).toLowerCase().includes(q) ||
+        x.invite_code.toLowerCase().includes(q) ||
+        x.phone.includes(q) ||
+        String(x.account_number || "").toLowerCase().includes(q) ||
+        x.id.toLowerCase().includes(q)
+      );
     }
     setFiltered(r);
   }, [search, statusFilter, requests]);
@@ -193,65 +200,113 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
     if (!selected || isSubAdmin) return;
     setActing(true); setError("");
 
-    // ── MANUAL WITHDRAWAL MODE ────────────────────────────────────
-    // Admin clicks "Approve" → we update withdrawal_history to 'completed'
-    // WITHOUT calling the PKPay Payout API. The admin must manually
-    // transfer funds via the PKPay Dashboard.
-    const withdrawalId = selected.id;
+    const requestId = selected.id;
     const alreadyCompleted = selected.status === "completed";
 
     if (alreadyCompleted) {
-      setError("This withdrawal was already completed.");
+      setError("This request was already completed.");
       setActing(false);
       return;
     }
 
     try {
-      // Step 1: Call approve_withdrawal RPC to deduct balance and set processing
-      const { data: approveData, error: approveErr } = await sb.rpc("approve_withdrawal", { p_withdrawal_id: withdrawalId });
-      
-      if (approveErr) {
-        const errMsg = (approveErr?.message || "").toLowerCase();
-        if (errMsg.includes("already_processed") || errMsg.includes("already finalized")) {
-          console.log(`[approve] ${withdrawalId} already processed — finalizing as completed.`);
-        } else {
-          throw new Error(`RPC Error: ${approveErr.message}`);
+      if (selected.type === "deposit") {
+        // ── DEPOSIT APPROVAL ────────────────────────────────────────
+        // Mark deposit_history as 'completed'.
+        // The database trigger fn_on_deposit_approved will automatically
+        // credit ONLY users.main_balance (never game_balance).
+        const { error: updateDepositErr } = await sb
+          .from("deposit_history")
+          .update({
+            status: "completed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", requestId);
+
+        if (updateDepositErr) {
+          throw new Error(`Deposit update error: ${updateDepositErr.message}`);
         }
+
+        setError(`✅ Deposit approved. Rs ${selected.amount.toLocaleString()} credited to main_balance.`);
+        setTimeout(() => setError(""), 8000);
+
+      } else {
+        // ── AUTO PAYOUT WITHDRAWAL ──────────────────────────────────
+        // Admin clicks "Approve" → call approve_withdrawal RPC → call payout API
+        
+        // Step 1: Call approve_withdrawal RPC to deduct balance and set processing
+        const { data: approveData, error: approveErr } = await sb.rpc("approve_withdrawal", { p_withdrawal_id: requestId });
+        
+        if (approveErr) {
+          const errMsg = (approveErr?.message || "").toLowerCase();
+          if (errMsg.includes("already_processed") || errMsg.includes("already finalized")) {
+            console.log(`[approve] ${requestId} already processed — finalizing as completed.`);
+            // Mark as completed if already processed
+            await sb.from("withdrawal_history").update({
+              status: "completed",
+              updated_at: new Date().toISOString(),
+            }).eq("id", requestId);
+            
+            setError(`✅ Withdrawal already processed and completed.`);
+            setTimeout(() => setError(""), 8000);
+            
+            // Update local state
+            setRequests((prevList: any[]) =>
+              prevList.map(item =>
+                item.id === requestId ? { ...item, status: "completed" as RequestStatus } : item
+              )
+            );
+            setSelected((prev) => prev?.id === requestId ? { ...prev, status: "completed" as RequestStatus } : prev);
+            await fetchRequests();
+            setActing(false);
+            return;
+          } else {
+            throw new Error(`RPC Error: ${approveErr.message}`);
+          }
+        }
+
+        // Step 2: Call payout API to initiate PKPay transfer
+        const adminSecretToken = import.meta.env.VITE_ADMIN_INTERNAL_MUTATION_KEY;
+        if (!adminSecretToken) {
+          throw new Error("Admin secret token not configured");
+        }
+
+        const payoutResponse = await fetch("/api/payout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            withdrawal_id: requestId,
+            adminSecretToken: adminSecretToken,
+          }),
+        });
+
+        const payoutResult = await payoutResponse.json();
+        
+        if (!payoutResponse.ok || !payoutResult.success) {
+          throw new Error(payoutResult.error || "Payout API failed");
+        }
+
+        setError(`✅ Withdrawal approved. PKPay payout initiated.`);
+        setTimeout(() => setError(""), 8000);
       }
 
-      // Step 2: Directly mark as completed — NO PKPay API call
-      await sb.from("withdrawal_history").update({
-        status: "completed",
-        gateway_ref: `MANUAL:${Date.now()}`,
-        reason: null,
-        gateway_error_logs: null,
-        updated_at: new Date().toISOString(),
-      }).eq("id", withdrawalId);
-
-      // Step 3: Update local state optimistically
+      // Update local state optimistically
       setRequests((prevList: any[]) =>
         prevList.map(item =>
-          item.id === withdrawalId ? { ...item, status: "completed" as RequestStatus, reason: null } : item
+          item.id === requestId ? { ...item, status: "completed" as RequestStatus, reason: null } : item
         )
       );
-      setSelected((prev) => prev?.id === withdrawalId ? { ...prev, status: "completed" as RequestStatus, reason: null } : prev);
+      setSelected((prev) => prev?.id === requestId ? { ...prev, status: "completed" as RequestStatus, reason: null } : prev);
 
-      // Step 4: Show manual transfer alert
-      const manualMsg = "Status updated to Success. Admin must manually transfer funds via PKPay Dashboard.";
-      setError(`✅ ${manualMsg}`);
-      
-      // Clear success message after 8 seconds
-      setTimeout(() => setError(""), 8000);
-      
       await fetchRequests();
 
     } catch (err: any) {
       setRequests((prevList: any[]) =>
         prevList.map(item =>
-          item.id === withdrawalId ? { ...item, status: "pending" as RequestStatus } : item
+          item.id === requestId ? { ...item, status: "pending" as RequestStatus } : item
         )
       );
-      setSelected((prev) => prev?.id === withdrawalId ? { ...prev, status: "pending" as RequestStatus } : prev);
+      setSelected((prev) => prev?.id === requestId ? { ...prev, status: "pending" as RequestStatus } : prev);
       setError(err?.message || "Approve failed");
       await fetchRequests();
     } finally { setActing(false); }
@@ -285,7 +340,12 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           created_at:  new Date().toISOString(),
         });
       } else {
-        await sb.from("transactions").update({ status: "failed", gateway_ref: rejectReason }).eq("id", selected.id);
+        // Reject deposit → update deposit_history status = 'failed'
+        await sb.from("deposit_history").update({
+          status: "failed",
+          remarks: `Admin Rejected: ${rejectReason}`,
+          updated_at: new Date().toISOString(),
+        }).eq("id", selected.id);
       }
       setShowReject(false); setRejectReason("");
       await fetchRequests();

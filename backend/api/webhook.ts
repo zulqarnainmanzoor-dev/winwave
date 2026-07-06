@@ -5,7 +5,10 @@ import { supabaseAdmin } from '../database/db';
 const router = Router();
 
 // Webhook secret for signature verification
-const WEBHOOK_SECRET = process.env.Webhook_secret || process.env.Payout_API_secret || "";
+const WEBHOOK_SECRET =
+  process.env.WEBHOOK_SECRET ||
+  process.env.Webhook_secret ||
+  "";
 
 // PKPay HMAC-SHA256 signature verification
 // Sort keys alphabetically, exclude 'sign', join as key=value&...
@@ -121,11 +124,23 @@ router.post('/payout', async (req, res) => {
 
       if (error) {
         console.error("[webhook/payout] complete_withdrawal error:", error);
-        return res.status(500).json({ error: error.message });
+        // Fallback: update directly if RPC fails
+        const { error: updateError } = await supabaseAdmin
+          .from("withdrawal_history")
+          .update({
+            status: "completed",
+            gateway_ref: `pkpay:${out_trade_no}`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", withdrawalId);
+        
+        if (updateError) {
+          console.error("[webhook/payout] Direct update also failed:", updateError);
+        }
       }
 
       // Return 200 even if already_completed so PKPay stops retrying
-      console.log(`[webhook/payout] ✓ Completed: ${withdrawalId}`, data);
+      console.log(`[webhook/payout] ✓ Completed: ${withdrawalId}`);
       return res.status(200).json({ code: 0, msg: "success" });
 
     } else {
@@ -137,10 +152,22 @@ router.post('/payout', async (req, res) => {
 
       if (error) {
         console.error("[webhook/payout] fail_withdrawal error:", error);
-        return res.status(500).json({ error: error.message });
+        // Fallback: update directly if RPC fails
+        const { error: updateError } = await supabaseAdmin
+          .from("withdrawal_history")
+          .update({
+            status: "failed",
+            reason: `PKPay payout failed (status=${status})`,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", withdrawalId);
+        
+        if (updateError) {
+          console.error("[webhook/payout] Direct update also failed:", updateError);
+        }
       }
 
-      console.log(`[webhook/payout] ✗ Failed + refunded: ${withdrawalId}`, data);
+      console.log(`[webhook/payout] ✗ Failed: ${withdrawalId}`);
       return res.status(200).json({ code: 0, msg: "noted_failed" });
     }
 

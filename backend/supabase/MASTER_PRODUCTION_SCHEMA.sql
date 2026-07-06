@@ -217,6 +217,102 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.submit_withdrawal(UUID, NUMERIC, TEXT, TEXT, TEXT, TEXT) TO authenticated;
 
+-- Approve withdrawal: deduct balance, set status to processing
+CREATE OR REPLACE FUNCTION public.approve_withdrawal(
+  p_withdrawal_id UUID
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID;
+  v_amount NUMERIC;
+  v_balance NUMERIC;
+  v_status TEXT;
+BEGIN
+  -- Fetch withdrawal details
+  SELECT user_id, amount, status INTO v_user_id, v_amount, v_status
+  FROM public.withdrawal_history
+  WHERE id = p_withdrawal_id
+  FOR UPDATE;
+
+  IF v_user_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Withdrawal not found');
+  END IF;
+
+  -- Check if already processed
+  IF v_status IN ('completed', 'processing') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'already_processed');
+  END IF;
+
+  -- Verify balance
+  SELECT main_balance INTO v_balance
+  FROM public.users
+  WHERE id = v_user_id
+  FOR UPDATE;
+
+  IF v_balance < v_amount THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Insufficient balance');
+  END IF;
+
+  -- Deduct balance
+  UPDATE public.users
+  SET main_balance = main_balance - v_amount
+  WHERE id = v_user_id;
+
+  -- Set status to processing
+  UPDATE public.withdrawal_history
+  SET status = 'processing', updated_at = NOW()
+  WHERE id = p_withdrawal_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.approve_withdrawal(UUID) TO authenticated;
+
+-- Reject withdrawal: refund balance, set status to rejected
+CREATE OR REPLACE FUNCTION public.fail_withdrawal(
+  p_withdrawal_id UUID,
+  p_reason TEXT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID;
+  v_amount NUMERIC;
+BEGIN
+  -- Fetch withdrawal details
+  SELECT user_id, amount INTO v_user_id, v_amount
+  FROM public.withdrawal_history
+  WHERE id = p_withdrawal_id
+  FOR UPDATE;
+
+  IF v_user_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Withdrawal not found');
+  END IF;
+
+  -- Refund balance
+  UPDATE public.users
+  SET main_balance = main_balance + v_amount
+  WHERE id = v_user_id;
+
+  -- Set status to rejected
+  UPDATE public.withdrawal_history
+  SET status = 'rejected', reason = p_reason, updated_at = NOW()
+  WHERE id = p_withdrawal_id;
+
+  RETURN jsonb_build_object('success', true);
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.fail_withdrawal(UUID, TEXT) TO authenticated;
+
 -- Withdraw Requests
 CREATE TABLE IF NOT EXISTS public.withdraw_requests (
   id              TEXT          PRIMARY KEY,

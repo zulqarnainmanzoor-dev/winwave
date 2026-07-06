@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
@@ -9,6 +10,14 @@ import adminRouter from '../admin/admin';
 const app = express();
 const adminSecret = process.env.ADMIN_SECRET_ID || '3399944';
 const adminIndexPath = path.join(process.cwd(), 'dist', 'index.html');
+
+// Enable CORS
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://localhost:3000', 'https://winclub-officiall.vercel.app'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 app.use(express.json());
 

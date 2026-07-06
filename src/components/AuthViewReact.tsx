@@ -431,9 +431,10 @@ export default function AuthView({
           '3. email generated': email,
           '4. password length': password.length,
           '5. supabase URL': import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
-          '5b. supabase URL from .env': process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
+          '5b. supabase URL from .env': import.meta.env.VITE_SUPABASE_URL || import.meta.env.NEXT_PUBLIC_SUPABASE_URL,
           '5c. window location': window.location.href,
         });
+        
         
         console.log('🔍 [AuthView] Calling signInWithPassword with:', {
           email,
@@ -487,7 +488,7 @@ export default function AuthView({
           }
           
           // Check if IDs match
-          if (count > 0) {
+          if ((count ?? 0) > 0) {
             const { data: userData } = await supabase
               .from("users")
               .select("id")

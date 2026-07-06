@@ -118,7 +118,7 @@ export default function DepositView({
   };
 
   // Payment Redirection Logic based on selected method
-  const handlePayNow = () => {
+  const handlePayNow = async () => {
     const amountToPay = selectedAmount || parseInt(amount);
 
     if (!amountToPay || isNaN(amountToPay)) {
@@ -131,23 +131,46 @@ export default function DepositView({
     const targetUrl = links[amountToPay];
 
     if (targetUrl) {
-      // create a pending transaction record before redirect
-      try {
-        const txId = `TX-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
-        const userId = (userContext as any)?.uid || null;
-        void (async () => {
-          try {
-            await (supabase as any)
-              .from('transactions')
-              .insert([{ id: txId, user_id: userId, type: 'deposit', amount: amountToPay, status: 'pending', gateway_ref: targetUrl }]);
-            window.location.href = targetUrl;
-          } catch {
-            window.location.href = targetUrl;
-          }
-        })();
+      // Extract order_id from PKPay URL (last part after /pay/)
+      const urlParts = targetUrl.split('/');
+      const orderId = urlParts[urlParts.length - 1];
+      
+      if (!orderId) {
+        window.location.href = targetUrl;
         return;
+      }
+
+      // Create pending deposit_history record before redirect
+      try {
+        const userId = (userContext as any)?.uid || null;
+        if (!userId) {
+          window.location.href = targetUrl;
+          return;
+        }
+
+        try {
+          // Insert into deposit_history with PKPay order_id and WAIT for completion
+          await (supabase as any)
+            .from('deposit_history')
+            .insert([{
+              user_id: userId,
+              amount: amountToPay,
+              method: selectedPaymentMethod.toUpperCase(),
+              order_id: orderId,
+              gateway_ref: targetUrl,
+              status: 'pending',
+              remarks: `PKPay deposit via ${selectedPaymentMethod.toUpperCase()}. Amount Rs ${amountToPay}`,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }]);
+          console.log(`Created pending deposit for order_id: ${orderId}`);
+        } catch (error) {
+          console.error('Failed to create deposit record:', error);
+        }
+        
+        // Redirect AFTER insert completes
+        window.location.href = targetUrl;
       } catch (e) {
-        // fallback to redirect
         window.location.href = targetUrl;
         return;
       }

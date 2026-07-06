@@ -96,10 +96,10 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
           break;
 
         case "recharge":
-          // STRICTLY query the internal 'deposits' system records table
+          // Query COMPLETE deposit history using the view
           let dq = sb
-            .from("deposits")
-            .select("id, user_id, amount, bonus, method, status, gateway_ref, created_at")
+            .from("v_complete_deposit_history")
+            .select("id, user_id, amount, method, status, gateway_ref, order_id, remarks, created_at, updated_at, source_table")
             .order("created_at", { ascending: false })
             .limit(200);
           if (statusFilter !== "all") dq = dq.eq("status", statusFilter);
@@ -112,8 +112,9 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
             amount: r.amount,
             status: r.status,
             created_at: r.created_at,
-            method: r.method || "Gateway",
-            reference: r.gateway_ref || r.id,
+            method: r.method || "PKPAY",
+            reference: r.order_id || r.gateway_ref || r.id || "N/A",
+            source: r.source_table || "deposit_history",
           }));
           break;
       }

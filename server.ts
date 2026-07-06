@@ -2,6 +2,7 @@ import 'dotenv/config';
 import fs from 'fs';
 import path from "path";
 import express from "express";
+import cors from 'cors';
 import { createServer as createViteServer } from "vite";
 import { startWinGoEngine, stopWinGoEngine } from "./backend/game-engine/wingoEngine.js";
 
@@ -18,6 +19,14 @@ async function startServer() {
 
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
+
+  // Enable CORS for development
+  app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:3000', 'https://winclub-officiall.vercel.app'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  }));
 
   app.use(express.json());
   app.use('/assets', express.static(path.join(process.cwd(), 'assets')));

@@ -9,25 +9,32 @@ import wingoRouter from './wingo';
 import payoutRouter from './payout';
 import referralStatsRouter from './referral-stats';
 import { getDeviceContext, logSecurityEvent } from './security';
+import webhookTestRouter from './webhook-test';
+
+// Startup log: canonical public webhook endpoint for PKPay deposit
+console.log("PKPay Deposit Webhook:", "/api/webhook/deposit");
+console.log("PKPay Payout Webhook:", "/api/webhook/payout");
+console.log("Webhook Test Endpoint:", "/api/webhook/test");
 
 const router = Router();
 
 router.use('/', registerRouter);
 router.use('/members', membersRouter);
-// Updated webhook routes - using new structure
+// Webhook routes (canonical)
 router.post('/webhook/deposit', depositWebhookHandler);
 router.post('/webhook/payout', payoutRouter);
-// Legacy compatibility routes
-router.post('/webhooks/pkpay', depositWebhookHandler);
+router.use('/webhook/test', webhookTestRouter);
+
+// Legacy compatibility alias (forward internally; do not maintain separate implementation)
+router.post('/webhooks/pkpay', (req, res, next) => {
+  req.url = '/webhook/deposit';
+  return depositWebhookHandler(req, res, next);
+});
+
 router.use('/wallet', walletRouter);
 router.use('/withdraw', withdrawRouter);
 router.use('/wingo', wingoRouter);
 router.use('/payout', payoutRouter);
-router.post('/payout', (req, res, next) => {
-  // Redirect to /payout endpoint for compatibility
-  req.url = '/payout';
-  payoutRouter(req, res, next);
-});
 
 // Optimized referral stats endpoints
 router.use('/referral', referralStatsRouter);

@@ -25,7 +25,7 @@ function buildSignature(params: Record<string, any>): string {
     .digest("hex");
 }
 
-router.post('/payout', async (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const body = req.body;
     const { withdrawal_id, adminSecretToken } = body;
@@ -88,7 +88,7 @@ router.post('/payout', async (req, res) => {
       out_trade_no:   withdrawal.id,          // our withdrawal UUID as idempotency key
       amount:         Number(withdrawal.amount).toFixed(2),
       channel,
-      account_number: withdrawal.account_number,
+      account_number: withdrawal.account_no,
       account_name:   withdrawal.account_name || "",
       timestamp:      Math.floor(Date.now() / 1000).toString(),
       nonce_str:      crypto.randomBytes(8).toString("hex"),
@@ -221,7 +221,50 @@ router.post('/payout', async (req, res) => {
     }
 
   } catch (error: any) {
-    console.error("Critical Catch Failure within Payout Execution Pipeline:", error.message);
+    console.error("Critical Catch Failure within Payout Execution Pipeline:", error?.message || error);
+    return res.status(500).json({ success: false, error: error?.message || String(error) || 'Unknown error' });
+  }
+});
+
+// Payout Webhook Handler - receives status updates from PKPay
+router.post('/webhook', async (req, res) => {
+  try {
+    const { out_trade_no, status, transaction_id, error_msg } = req.body;
+
+    if (!out_trade_no) {
+      return res.status(400).json({ success: false, error: "Missing out_trade_no" });
+    }
+
+    console.log(`[payout-webhook] Received webhook for withdrawal ${out_trade_no}, status: ${status}`);
+
+    // Map PKPay status to our status
+    let updateStatus = 'pending';
+    if (status === 'success' || status === 'completed') {
+      updateStatus = 'completed';
+    } else if (status === 'failed' || status === 'error') {
+      updateStatus = 'rejected';
+    }
+
+    // Update withdrawal_history with webhook status
+    const { error: updateError } = await supabaseAdmin
+      .from('withdrawal_history')
+      .update({
+        status: updateStatus,
+        gateway_ref: transaction_id || out_trade_no,
+        gateway_error_logs: error_msg || null,
+        updated_at: new Date().toISOString()
+      } as any)
+      .eq('id', out_trade_no);
+
+    if (updateError) {
+      console.error(`[payout-webhook] Failed to update withdrawal ${out_trade_no}:`, updateError);
+      return res.status(500).json({ success: false, error: updateError.message });
+    }
+
+    console.log(`[payout-webhook] Successfully updated withdrawal ${out_trade_no} to status: ${updateStatus}`);
+    return res.status(200).json({ success: true, message: "Webhook processed" });
+  } catch (error: any) {
+    console.error("[payout-webhook] Critical error:", error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
