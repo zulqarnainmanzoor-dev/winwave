@@ -26,13 +26,19 @@ export interface Database {
   };
 }
 
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE || '';
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+const supabaseServiceRoleKey = process.env.SERVICE_ROLE_KEY || '';
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
 
+console.log('[DB Init] Supabase URL:', supabaseUrl ? 'SET' : 'MISSING');
+console.log('[DB Init] Service Role Key:', supabaseServiceRoleKey ? 'SET' : 'MISSING');
+console.log('[DB Init] Anon Key:', supabaseAnonKey ? 'SET' : 'MISSING');
+
 if (!supabaseUrl || !supabaseKey) {
-  console.warn('Supabase backend client created without URL or key. Set SUPABASE_URL or VITE_SUPABASE_URL, and a valid SERVICE_ROLE_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY, or VITE_SUPABASE_ANON_KEY.');
+  console.error('[DB Init] ERROR: Missing Supabase configuration!');
+  console.error('[DB Init] URL:', supabaseUrl ? 'OK' : 'MISSING');
+  console.error('[DB Init] Key:', supabaseKey ? 'OK' : 'MISSING');
 }
 
 export const supabase: SupabaseClient<any> = createClient<any>(supabaseUrl, supabaseKey, {
@@ -43,7 +49,7 @@ export const supabase: SupabaseClient<any> = createClient<any>(supabaseUrl, supa
 
 const supabaseAdminKey = supabaseServiceRoleKey || '';
 if (!supabaseAdminKey) {
-  console.warn('Supabase admin client is missing a service role key; server-side writes may be blocked by RLS.');
+  console.error('[DB Init] ERROR: Missing service role key for admin client');
 }
 
 export const supabaseAdmin: SupabaseClient<any> = createClient<any>(supabaseUrl, supabaseAdminKey, {

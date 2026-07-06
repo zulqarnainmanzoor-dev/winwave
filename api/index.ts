@@ -21,6 +21,19 @@ app.use(cors({
 
 app.use(express.json());
 
+// Simple test endpoint (no dependencies)
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    env: {
+      supabaseUrl: process.env.VITE_SUPABASE_URL ? 'SET' : 'MISSING',
+      serviceRoleKey: process.env.SERVICE_ROLE_KEY ? 'SET' : 'MISSING',
+      anonKey: process.env.VITE_SUPABASE_ANON_KEY ? 'SET' : 'MISSING'
+    }
+  });
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
