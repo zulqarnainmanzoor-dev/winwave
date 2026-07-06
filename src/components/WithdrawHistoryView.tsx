@@ -250,7 +250,7 @@ export default function WithdrawHistoryView({ onBack }: { onBack: () => void }) 
                 </div>
 
                 {/* Row 3: Account Details */}
-                {(rec.account_name || rec.account_number) && (
+                {(rec.account_name || rec.account_no) && (
                   <div className="text-[10px] text-gray-500 font-mono bg-white/5 rounded-lg px-3 py-2">
                     {rec.account_name && (
                       <div className="flex items-center gap-1.5">
@@ -258,10 +258,10 @@ export default function WithdrawHistoryView({ onBack }: { onBack: () => void }) 
                         <span className="text-gray-300 font-semibold">{rec.account_name}</span>
                       </div>
                     )}
-                    {rec.account_number && (
+                    {rec.account_no && (
                       <div className="flex items-center gap-1.5 mt-0.5">
                         <span className="text-gray-400">Acc:</span>
-                        <span className="text-gray-300">{rec.account_number}</span>
+                        <span className="text-gray-300">{rec.account_no}</span>
                       </div>
                     )}
                   </div>
