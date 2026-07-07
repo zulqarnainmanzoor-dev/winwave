@@ -15,28 +15,20 @@ interface SubStats {
 
 interface InviteeRow {
   id: string;
-  referral_code: string | null;
-  phone_number: string | null;
-  invite_code: string | null;
+  uid_short: string;
+  phone_number: string;
+  total_deposit: number;
   total_bets: number;
-  account_status: string | null;
   created_at: string;
-  referred_by: string | null;
-  main_balance?: number | null;
-  game_balance?: number | null;
-  total_deposit?: number | null;
-  total_withdrawal?: number | null;
-  vip_level?: number | null;
 }
 
 interface SubordinateRow {
   id: string;
-  referral_code: string | null;
-  phone_number?: string;
+  uid_short: string;
   level: number;
-  deposit_amount: number;
-  commission: number;
-  created_at: string;
+  today_deposit: number;
+  today_commission: number;
+  registration_date: string;
 }
 
 const DATE_OPTIONS = ["All", "Today", "Yesterday", "This Week", "This Month", "Last Month"];
@@ -68,42 +60,87 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
   const { uid } = useUser();
   const [activeTab, setActiveTab]           = useState<"subordinate" | "invitees">("subordinate");
   const [searchId, setSearchId]             = useState("");
-  const [selectedDate, setSelectedDate]     = useState("All");
+  const [selectedDate, setSelectedDate]     = useState("Today");
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [selectedLevel, setSelectedLevel]   = useState("All");
   const [showLevelDrop, setShowLevelDrop]   = useState(false);
   const [stats, setStats]                   = useState<SubStats | null>(null);
-  const [invitees, setInvitees]             = useState<InviteeRow[]>([]);
   const [loading, setLoading]               = useState(false);
   const [actionMsg, setActionMsg]           = useState<string | null>(null);
   const [subordinates, setSubordinates]     = useState<SubordinateRow[]>([]);
   const [subordinatesLoading, setSubordinatesLoading] = useState(false);
+  const [invitees, setInvitees]             = useState<InviteeRow[]>([]);
+  const [inviteesLoading, setInviteesLoading] = useState(false);
 
-  // ── Fetch subordinate stats ──────────────────────────────────────
+  // ── Fetch CORRECT deposit stats (3,600 not 22,000) ──────────
   const fetchStats = useCallback(async () => {
     if (!uid) return;
     setLoading(true);
     try {
-      const { data: rows, error } = await adminSupabase
-        .from('users')
-        .select('id, total_deposit, total_bets')
-        .eq('referred_by', uid);
+      console.log('[InviteesOverview] Fetching CORRECT deposit stats for uid:', uid);
+      
+      // Try new correct function first
+      const { data, error } = await (adminSupabase as any)
+        .rpc('get_correct_deposit_stats', { p_agent_id: uid });
 
-      if (error) throw error;
+      if (!error && data && data.length > 0) {
+        const result = data[0];
+        console.log('[InviteesOverview] Correct deposit stats:', result);
+        
+        // Show TODAY'S deposits from direct members only
+        setStats({
+          deposit_count:        Number(result.direct_members || 0),
+          deposit_amount:       Number(result.direct_deposit_today || 0), // TODAY'S deposits
+          total_bet:            0, // Not used
+          bettor_count:         Number(result.direct_members || 0),
+          first_deposit_count:  0, // Not used
+          first_deposit_amount: 0, // Not used
+        });
+        return;
+      }
 
-      const r = (rows || []) as Array<{ id: string; total_deposit: number | null; total_bets: number | null }>;
-      const depositUsers  = r.filter(u => Number(u.total_deposit || 0) > 0).length;
-      const totalDeposits = r.reduce((s, u) => s + Number(u.total_deposit || 0), 0);
-      const totalBets     = r.reduce((s, u) => s + Number(u.total_bets || 0), 0);
+      // Fallback: Get direct members and calculate manually
+      console.log('[InviteesOverview] Using fallback calculation');
+      
+      const { data: members, error: membersError } = await (adminSupabase as any)
+        .from("users")
+        .select("id, total_deposit")
+        .eq("referred_by", uid);
+
+      if (membersError) throw membersError;
+
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      // Calculate today's deposits for each member
+      let todayTotal = 0;
+      if (members && members.length > 0) {
+        for (const member of members) {
+          const { data: deposits } = await (adminSupabase as any)
+            .from("deposit_history")
+            .select("amount")
+            .eq("user_id", member.id)
+            .eq("status", "completed")
+            .gte("created_at", todayStart.toISOString())
+            .lt("created_at", todayEnd.toISOString());
+
+          if (deposits) {
+            todayTotal += deposits.reduce((sum, d) => sum + Number(d.amount || 0), 0);
+          }
+        }
+      }
 
       setStats({
-        deposit_count:        r.length,
-        deposit_amount:       totalDeposits,
-        total_bet:            totalBets,
-        bettor_count:         depositUsers,
-        first_deposit_count:  depositUsers,
-        first_deposit_amount: totalDeposits,
+        deposit_count:        members?.length || 0,
+        deposit_amount:       todayTotal, // ACTUAL today's deposits
+        total_bet:            0,
+        bettor_count:         members?.length || 0,
+        first_deposit_count:  0,
+        first_deposit_amount: 0,
       });
+
     } catch (err) {
       console.error('[InviteesOverview] fetchStats failed:', err);
       setStats({ deposit_count: 0, deposit_amount: 0, total_bet: 0, bettor_count: 0, first_deposit_count: 0, first_deposit_amount: 0 });
@@ -112,79 +149,96 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
     }
   }, [uid]);
 
-  // ── Fetch invitees list (Invitees tab) ───────────────────────────
-  const fetchInvitees = useCallback(async () => {
-    if (!uid) return;
-    try {
-      const { data, error } = await adminSupabase
-        .from('users')
-        .select('id, referral_code, phone_number, invite_code, total_bets, account_status, created_at, referred_by, main_balance, game_balance, total_deposit, total_withdrawal, vip_level')
-        .eq('referred_by', uid)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      let results = (data || []) as InviteeRow[];
-
-      // Filter by search term (UID or phone number)
-      if (searchId.trim()) {
-        const searchTerm = searchId.trim().toLowerCase();
-        results = results.filter((user) => {
-          // Search by numeric UID (referral_code field)
-          const uidMatch = (user.referral_code || '').toLowerCase().includes(searchTerm);
-          
-          // Search by phone number
-          const phoneMatch = (user.phone_number || '').toLowerCase().includes(searchTerm);
-          
-          return uidMatch || phoneMatch;
-        });
-      }
-
-      setInvitees(results);
-    } catch (err) {
-      console.error('[InviteesOverview] fetchInvitees failed:', err);
-      setInvitees([]);
-    }
-  }, [uid, searchId]);
-
-  // ── Fetch subordinates list (Subordinate tab) ────────────────────
+  // ── Fetch ALL team members with multi-level hierarchy and numeric UID ─────
   const fetchSubordinates = useCallback(async () => {
     if (!uid) return;
     setSubordinatesLoading(true);
     try {
-      const { data, error } = await adminSupabase
-        .from('users')
-        .select('id, referral_code, phone_number, created_at, referred_by, total_deposit, vip_level')
-        .eq('referred_by', uid)
-        .order('created_at', { ascending: false });
+      console.log('[InviteesOverview] Fetching team members for uid:', uid);
+      
+      // Use new RPC that gets today's deposits with 9-digit numeric UID
+      const { data: teamMembers, error: teamError } = await (adminSupabase as any)
+        .rpc('get_agent_team_today_deposits', { p_agent_id: uid });
 
-      if (error) throw error;
+      if (teamError) {
+        console.error('[InviteesOverview] Team RPC error:', teamError);
+        // Fallback to direct members only
+        const { data: allMembers, error: membersError } = await (adminSupabase as any)
+          .from("users")
+          .select("id, referral_code, phone_number, vip_level, created_at, total_deposit")
+          .eq("referred_by", uid)
+          .order("created_at", { ascending: false });
 
-      let results = (data || []).map((sub: any) => ({
-        id:             sub.id,
-        referral_code:  sub.referral_code,
-        phone_number:   sub.phone_number,
-        level:          Number(sub.vip_level || 0),
-        deposit_amount: Number(sub.total_deposit || 0),
-        commission:     0,
-        created_at:     sub.created_at,
+        if (membersError) throw membersError;
+
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+        
+        const results = await Promise.all(
+          (allMembers || []).map(async (member: any) => {
+            // Get deposits today
+            const { data: deposits } = await (adminSupabase as any)
+              .from("deposit_history")
+              .select("amount")
+              .eq("user_id", member.id)
+              .eq("status", "completed")
+              .gte("created_at", todayStart.toISOString())
+              .lt("created_at", todayEnd.toISOString());
+
+            const todayDeposit = (deposits || []).reduce((sum: number, d: any) => sum + Number(d.amount || 0), 0);
+
+            // Use 9-digit numeric UID from referral_code
+            const numericUid = member.referral_code || '000000000';
+
+            return {
+              id: member.id,
+              uid_short: numericUid,
+              level: Number(member.vip_level || 0),
+              today_deposit: todayDeposit,
+              today_commission: 0,
+              registration_date: member.created_at,
+              is_direct_member: true,
+            };
+          })
+        );
+        
+        let filtered = results;
+        if (searchId.trim()) {
+          const searchTerm = searchId.trim().toLowerCase();
+          filtered = results.filter((sub) => {
+            const uidMatch = (sub.uid_short || '').toLowerCase().includes(searchTerm);
+            return uidMatch;
+          });
+        }
+        setSubordinates(filtered);
+        return;
+      }
+
+      console.log('[InviteesOverview] Team members found:', teamMembers?.length || 0);
+
+      const results = (teamMembers || []).map((member: any) => ({
+        id: member.member_id,
+        uid_short: member.numeric_uid || '000000000',
+        level: member.level || 0,
+        today_deposit: Number(member.today_deposit || 0),
+        today_commission: 0,
+        registration_date: member.registration_date,
+        is_direct_member: member.is_direct_member || false,
       }));
 
-      // Filter by search term (UID or phone number)
+      let filtered = results;
       if (searchId.trim()) {
         const searchTerm = searchId.trim().toLowerCase();
-        results = results.filter((sub) => {
-          // Search by numeric UID (referral_code field)
-          const uidMatch = (sub.referral_code || '').toLowerCase().includes(searchTerm);
-          
-          // Search by phone number
-          const phoneMatch = (sub.phone_number || '').toLowerCase().includes(searchTerm);
-          
-          return uidMatch || phoneMatch;
+        filtered = results.filter((sub) => {
+          const uidMatch = (sub.uid_short || '').toLowerCase().includes(searchTerm);
+          return uidMatch;
         });
       }
 
-      setSubordinates(results);
+      console.log('[InviteesOverview] Subordinates after filter:', filtered.length);
+      setSubordinates(filtered);
     } catch (err) {
       console.error('[InviteesOverview] fetchSubordinates failed:', err);
       setSubordinates([]);
@@ -193,17 +247,87 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
     }
   }, [uid, searchId]);
 
-  useEffect(() => { void fetchStats(); },        [fetchStats]);
-  useEffect(() => { void fetchInvitees(); },     [fetchInvitees]);
-  useEffect(() => { void fetchSubordinates(); }, [fetchSubordinates]);
+  // ── Fetch ALL invitees (lifetime) for Invitees tab with numeric UID ───────
+  const fetchInvitees = useCallback(async () => {
+    if (!uid) return;
+    setInviteesLoading(true);
+    try {
+      // Use new RPC for complete invited members data
+      const { data: invitedMembers, error: rpcError } = await (adminSupabase as any)
+        .rpc('get_agent_invited_members_complete', { p_agent_id: uid });
 
-  const handleAccountAction = async (userId: string, action: "suspended" | "banned") => {
-    const { error } = await (supabase as any).from("users").update({ account_status: action }).eq("id", userId);
-    if (error) { setActionMsg("Action failed: " + error.message); return; }
-    setActionMsg(`User ${action} successfully.`);
-    setTimeout(() => setActionMsg(null), 3000);
-    void fetchInvitees();
-  };
+      if (rpcError) {
+        console.error('[InviteesOverview] RPC error:', rpcError);
+        // Fallback to direct query
+        const { data, error } = await (adminSupabase as any)
+          .from("users")
+          .select("id, referral_code, phone_number, total_deposit, total_bets, vip_level, created_at")
+          .eq("referred_by", uid)
+          .order("created_at", { ascending: false });
+
+        if (error) throw error;
+
+        let results = (data || []).map((u: any) => {
+          // Use 9-digit numeric UID from referral_code
+          const numericUid = u.referral_code || '000000000';
+          
+          return {
+            id: u.id,
+            uid_short: numericUid,
+            original_uid: numericUid,
+            phone_number: u.phone_number || '',
+            total_deposit: Number(u.total_deposit || 0),
+            total_bets: Number(u.total_bets || 0),
+            created_at: u.created_at,
+          };
+        });
+
+        if (searchId.trim()) {
+          const searchTerm = searchId.trim().toLowerCase();
+          results = results.filter((invitee) => {
+            const uidMatch = (invitee.uid_short || '').toLowerCase().includes(searchTerm) ||
+                            (invitee.original_uid || '').toLowerCase().includes(searchTerm);
+            const phoneMatch = (invitee.phone_number || '').toLowerCase().includes(searchTerm);
+            return uidMatch || phoneMatch;
+          });
+        }
+
+        setInvitees(results);
+        return;
+      }
+
+      let results = (invitedMembers || []).map((member: any) => ({
+        id: member.member_id,
+        uid_short: member.numeric_uid || '000000000',
+        original_uid: member.numeric_uid || '000000000',
+        phone_number: member.phone_number || '',
+        total_deposit: Number(member.lifetime_deposit || 0),
+        total_bets: Number(member.total_bets || 0),
+        created_at: member.registration_date,
+      }));
+
+      if (searchId.trim()) {
+        const searchTerm = searchId.trim().toLowerCase();
+        results = results.filter((invitee) => {
+          const uidMatch = (invitee.uid_short || '').toLowerCase().includes(searchTerm) ||
+                          (invitee.original_uid || '').toLowerCase().includes(searchTerm);
+          const phoneMatch = (invitee.phone_number || '').toLowerCase().includes(searchTerm);
+          return uidMatch || phoneMatch;
+        });
+      }
+
+      setInvitees(results);
+    } catch (err) {
+      console.error('[InviteesOverview] fetchInvitees failed:', err);
+      setInvitees([]);
+    } finally {
+      setInviteesLoading(false);
+    }
+  }, [uid, searchId]);
+
+  useEffect(() => { void fetchStats(); }, [fetchStats]);
+  useEffect(() => { void fetchSubordinates(); }, [fetchSubordinates]);
+  useEffect(() => { void fetchInvitees(); }, [fetchInvitees]);
 
   const fmt = (n: number) => `Rs ${n.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
@@ -224,7 +348,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
               className={`flex-1 py-2.5 px-4 rounded-full text-xs font-black tracking-wider text-center transition-all cursor-pointer ${
                 activeTab === t ? "bg-gradient-to-r from-orange-500 to-amber-500 text-black shadow-lg" : "bg-transparent text-gray-400 hover:text-white"
               }`}>
-              {t === "subordinate" ? "Subordinate Data" : "Invitees"}
+              {t === "subordinate" ? "Daily Report" : "Invitees"}
             </button>
           ))}
         </div>
@@ -235,45 +359,6 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
 
         {activeTab === "subordinate" ? (
           <>
-            {/* Filters */}
-            <div className="grid grid-cols-2 gap-3 relative z-20">
-              <div className="relative">
-                <button onClick={() => { setShowDatePicker(!showDatePicker); setShowLevelDrop(false); }}
-                  className="w-full bg-[#1C1C1E] border border-white/5 rounded-2xl py-3 px-4 flex items-center justify-between text-xs font-black text-gray-300 cursor-pointer">
-                  <span className={selectedDate !== "All" ? "text-orange-500" : ""}>{selectedDate === "All" ? "Select Date" : selectedDate}</span>
-                  <Calendar className="w-4 h-4 text-gray-500" />
-                </button>
-                {showDatePicker && (
-                  <div className="absolute top-full left-0 right-0 mt-1.5 bg-[#161618] border border-white/10 rounded-2xl shadow-2xl overflow-hidden divide-y divide-white/5 z-30">
-                    {DATE_OPTIONS.map((opt) => (
-                      <button key={opt} onClick={() => { setSelectedDate(opt); setShowDatePicker(false); }}
-                        className={`w-full text-left py-2.5 px-4 text-xs font-bold transition-colors ${selectedDate === opt ? "bg-orange-500/10 text-orange-500" : "text-gray-400 hover:bg-white/5"}`}>
-                        {opt}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="relative">
-                <button onClick={() => { setShowLevelDrop(!showLevelDrop); setShowDatePicker(false); }}
-                  className="w-full bg-[#1C1C1E] border border-white/5 rounded-2xl py-3 px-4 flex items-center justify-between text-xs font-black text-gray-300 cursor-pointer">
-                  <span className={selectedLevel !== "All" ? "text-orange-500" : ""}>{selectedLevel}</span>
-                  <ChevronDown className="w-4 h-4 text-gray-500" />
-                </button>
-                {showLevelDrop && (
-                  <div className="absolute top-full left-0 right-0 mt-1.5 bg-[#161618] border border-white/10 rounded-2xl shadow-2xl overflow-hidden divide-y divide-white/5 z-30">
-                    {LEVEL_OPTIONS.map((lvl) => (
-                      <button key={lvl} onClick={() => { setSelectedLevel(lvl); setShowLevelDrop(false); }}
-                        className={`w-full text-left py-2.5 px-4 text-xs font-bold transition-colors ${selectedLevel === lvl ? "bg-orange-500/10 text-orange-500" : "text-gray-400 hover:bg-white/5"}`}>
-                        {lvl}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
             {/* Stats card */}
             {loading ? (
               <div className="flex justify-center py-10"><div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" /></div>
@@ -287,7 +372,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                     </div>
                     <div className="border-t border-white/5 pt-4">
                       <span className="text-xl font-black text-[#10b981] block">{stats?.bettor_count ?? 0}</span>
-                      <span className="text-[10px] font-bold text-gray-500 block uppercase mt-0.5">Number of bettors</span>
+                      <span className="text-[10px] font-bold text-gray-500 block uppercase mt-0.5">Deposit users</span>
                     </div>
                     <div className="border-t border-white/5 pt-4">
                       <span className="text-xl font-black text-[#ffa502] block">{stats?.first_deposit_count ?? 0}</span>
@@ -316,7 +401,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
             <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl overflow-hidden shadow-[0_8px_16px_rgba(0,0,0,0.4)]">
               <div className="bg-[#2C2C2E] p-3 border-b border-white/5">
                 <h3 className="text-xs font-black text-white uppercase tracking-wider text-center">
-                  Subordinates List ({subordinates.length})
+                  All Members ({subordinates.length})
                 </h3>
               </div>
 
@@ -327,20 +412,20 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
               ) : subordinates.length === 0 ? (
                 <div className="p-8 text-center">
                   <AlertCircle className="w-8 h-8 text-gray-600 mx-auto mb-2" />
-                  <p className="text-xs font-bold text-gray-500">No subordinates found</p>
+                  <p className="text-xs font-bold text-gray-500">No members found</p>
                 </div>
               ) : (
                 <div className="divide-y divide-white/5">
                   <div className="grid grid-cols-5 bg-[#252528] p-2.5 text-[10px] font-black uppercase text-gray-400 tracking-wider">
                     <span className="text-center">UID</span>
                     <span className="text-center">Level</span>
-                    <span className="text-center">Deposit Amount</span>
+                    <span className="text-center">Today Deposit</span>
                     <span className="text-center">Commission</span>
-                    <span className="text-center">Time</span>
+                    <span className="text-center">Registered</span>
                   </div>
                   {subordinates.map((sub) => (
                     <div key={sub.id} className="grid grid-cols-5 p-3 text-xs text-center items-center hover:bg-white/[0.02] transition-colors">
-                      <span className="font-mono text-white font-bold text-[11px]">{(sub.referral_code || '').toUpperCase()}</span>
+                      <span className="font-mono text-white font-bold text-[11px]">{sub.uid_short}</span>
                       <span className="text-center">
                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black ${
                           sub.level === 1 ? 'bg-orange-500/20 text-orange-400' : 'bg-green-500/20 text-green-400'
@@ -348,9 +433,9 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                           {sub.level}
                         </span>
                       </span>
-                      <span className="text-white font-bold text-[11px]">{fmt(sub.deposit_amount)}</span>
-                      <span className="text-[#ffa502] font-bold text-[11px]">{fmt(sub.commission)}</span>
-                      <span className="text-gray-400 text-[10px]">{new Date(sub.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                      <span className="text-green-400 font-bold text-[11px]">{fmt(sub.today_deposit)}</span>
+                      <span className="text-[#ffa502] font-bold text-[11px]">{fmt(sub.today_commission)}</span>
+                      <span className="text-gray-400 text-[10px]">{new Date(sub.registration_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                     </div>
                   ))}
                 </div>
@@ -374,79 +459,53 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
 
             <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl p-4 text-center">
               <span className="text-xs font-bold text-gray-400 block uppercase">
-                {searchId ? "Search Results" : "Total Direct Invitees"}
+                {searchId ? "Search Results" : "Total Invitees"}
               </span>
               <span className="text-3xl font-black text-[#ffa502] block mt-1.5">
-                {invitees.length} {searchId ? "User" : "Players"}
+                {invitees.length}
               </span>
             </div>
 
-            {invitees.length === 0 ? (
+            {inviteesLoading ? (
+              <div className="flex justify-center py-10">
+                <div className="w-6 h-6 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : invitees.length === 0 ? (
               <div className="bg-[#1C1C1E] border border-white/5 rounded-3xl p-10 text-center space-y-3">
-                <div className="w-12 h-12 bg-orange-500/10 rounded-full flex items-center justify-center mx-auto">
-                  <AlertCircle className="w-6 h-6 text-[#ffa502]" />
-                </div>
+                <AlertCircle className="w-12 h-12 text-gray-600 mx-auto" />
                 <p className="text-xs font-bold text-gray-400">
-                  {searchId ? "No users found matching your search." : "No invitees found."}
+                  {searchId ? "No invitees found matching your search." : "No invitees yet."}
                 </p>
               </div>
             ) : (
               <div className="space-y-3">
-                {invitees.map((u: any) => {
-                  const statusLabel = u.account_status === "banned" ? "Banned" : u.account_status === "suspended" ? "Suspended" : "Active";
-                  const statusClass = u.account_status === "banned" ? "text-red-500" : u.account_status === "suspended" ? "text-yellow-500" : "text-green-400";
-                  const shortUid = (u.referral_code || "").toUpperCase();
-                  const deposit = Number(u.total_deposit || 0);
-                  const withdrawal = Number(u.total_withdrawal || 0);
-                  const mainBalance = Number(u.main_balance || 0);
-                  const gameBalance = Number(u.game_balance || 0);
-                  const vipLevel = Number(u.vip_level || 0);
-                  const registeredAt = u.created_at ? new Date(u.created_at) : null;
-                  const registeredText = registeredAt ? registeredAt.toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true }) : "—";
-                  return (
-                    <div key={u.id} className="rounded-3xl border border-white/5 bg-[#1C1C1E] p-4 shadow-[0_8px_16px_rgba(0,0,0,0.35)]">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">UID</div>
-                          <div className="text-sm font-black text-white">{shortUid || "—"}</div>
-                        </div>
-                        <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${statusClass}`}>
-                          {statusLabel}
-                        </div>
+                {invitees.map((invitee) => (
+                  <div key={invitee.id} className="rounded-3xl border border-white/5 bg-[#1C1C1E] p-4 shadow-[0_8px_16px_rgba(0,0,0,0.35)]">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <div className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">UID</div>
+                        <div className="text-sm font-black text-white">{invitee.uid_short || "—"}</div>
                       </div>
-                      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-gray-300">
-                        <div className="rounded-2xl bg-black/20 p-2">
-                          <div className="text-[10px] uppercase text-gray-500">Phone</div>
-                          <div className="mt-1 font-semibold text-white">{u.phone_number || "—"}</div>
-                        </div>
-                        <div className="rounded-2xl bg-black/20 p-2">
-                          <div className="text-[10px] uppercase text-gray-500">Registered</div>
-                          <div className="mt-1 font-semibold text-white">{registeredText}</div>
-                        </div>
-                        <div className="rounded-2xl bg-black/20 p-2">
-                          <div className="text-[10px] uppercase text-gray-500">Deposit</div>
-                          <div className="mt-1 font-semibold text-white">{deposit.toFixed(2)}</div>
-                        </div>
-                        <div className="rounded-2xl bg-black/20 p-2">
-                          <div className="text-[10px] uppercase text-gray-500">Withdraw</div>
-                          <div className="mt-1 font-semibold text-white">{withdrawal.toFixed(2)}</div>
-                        </div>
-                        <div className="rounded-2xl bg-black/20 p-2">
-                          <div className="text-[10px] uppercase text-gray-500">Main Balance</div>
-                          <div className="mt-1 font-semibold text-white">{mainBalance.toFixed(2)}</div>
-                        </div>
-                        <div className="rounded-2xl bg-black/20 p-2">
-                          <div className="text-[10px] uppercase text-gray-500">Game Balance</div>
-                          <div className="mt-1 font-semibold text-white">{gameBalance.toFixed(2)}</div>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between text-[11px] text-gray-400">
-                        <span>VIP Level: {vipLevel}</span>
-                        <span>Direct</span>
+                      <div className="text-right">
+                        <div className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">Phone</div>
+                        <div className="text-sm font-black text-white">{invitee.phone_number || "—"}</div>
                       </div>
                     </div>
-                  );
-                })}
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
+                      <div className="rounded-2xl bg-black/20 p-2">
+                        <div className="uppercase text-gray-500">Total Deposit</div>
+                        <div className="mt-1 font-semibold text-green-400">{fmt(invitee.total_deposit)}</div>
+                      </div>
+                      <div className="rounded-2xl bg-black/20 p-2">
+                        <div className="uppercase text-gray-500">Total Bets</div>
+                        <div className="mt-1 font-semibold text-white">{fmt(invitee.total_bets)}</div>
+                      </div>
+                    </div>
+                    <div className="mt-2 text-[10px] text-gray-400">
+                      Registered: {new Date(invitee.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

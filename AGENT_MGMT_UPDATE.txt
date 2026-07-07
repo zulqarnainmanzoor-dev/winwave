@@ -1,0 +1,38 @@
+      // Fetch agent management stats using RPC
+      const { data: mgmtStats, error: mgmtError } = await (adminSupabase as any)
+        .rpc("get_agent_management_stats", { p_agent_id: user.id });
+      
+      if (mgmtError) throw mgmtError;
+      const stats = mgmtStats?.[0] || {};
+
+      // Fetch invited members
+      const { data: invitedMembers } = await (adminSupabase as any)
+        .from("users")
+        .select("id, referral_code, phone_number, created_at, total_deposit, total_bets")
+        .eq("referred_by", user.id)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      setAgentData({
+        id:                   user.id,
+        phone:                user.phone_number || "",
+        main_balance:         Number(user.main_balance ?? 0),
+        game_balance:         Number(user.game_balance ?? 0),
+        vip_level:            user.vip_level || 0,
+        invite_code:          user.referral_code || "",
+        total_bets:           Number(stats.lifetime_deposits ?? 0),
+        created_at:           user.created_at || "",
+        direct_members:       Number(stats.total_team_members ?? 0),
+        team_members:         Number(stats.active_members ?? 0),
+        yesterday_commission: Number(stats.total_commission ?? 0),
+        status:               "active",
+        is_agent:             Boolean(user.is_agent),
+        invited_members:      (invitedMembers || []).map((m: any) => ({
+          id:           m.id,
+          invite_code:  m.referral_code || "",
+          phone_number: m.phone_number || "",
+          created_at:   m.created_at || "",
+          total_deposit: Number(m.total_deposit || 0),
+          total_bets:   Number(m.total_bets || 0),
+        })),
+      });

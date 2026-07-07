@@ -108,7 +108,6 @@ export function AgentManagement() {
       const trimmed = agentUID.trim();
       const isUUID       = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
       const isPhone      = /^\d{10,15}$/.test(trimmed);
-      // invite_code can be 6-12 alphanumeric chars (e.g. "329554612" is 9 digits)
       const isInviteCode = /^[a-zA-Z0-9]{4,12}$/.test(trimmed) && !isUUID && !isPhone;
 
       let q = (adminSupabase as any)
@@ -119,62 +118,102 @@ export function AgentManagement() {
       let fetchErr: any = null;
 
       if (isUUID) {
-        // Search by exact UUID
         const result = await q.eq("id", trimmed).maybeSingle();
         ({ data, error: fetchErr } = result);
       } else if (isInviteCode) {
-        // Search by exact referral code (real UID)
         const result = await q.eq("referral_code", trimmed).maybeSingle();
         ({ data, error: fetchErr } = result);
       } else if (isPhone) {
-        // Search by exact phone number
         const result = await q.eq("phone_number", trimmed).maybeSingle();
         ({ data, error: fetchErr } = result);
       } else {
-        // Search by id, referral_code, or phone_number using separate queries
-        console.log('🔍 [AgentManagement] Searching by id, referral_code, phone_number separately');
-        
         const baseSelect = "id, phone_number, referral_code, main_balance, game_balance, vip_level, created_at, is_agent";
-        
         const [idResult, codeResult, phoneResult] = await Promise.all([
           (adminSupabase as any).from("users").select(baseSelect).eq("id", trimmed).maybeSingle(),
           (adminSupabase as any).from("users").select(baseSelect).eq("referral_code", trimmed).maybeSingle(),
           (adminSupabase as any).from("users").select(baseSelect).eq("phone_number", trimmed).maybeSingle()
         ]);
-
-        // Use whichever result found a match
         data = idResult.data || codeResult.data || phoneResult.data;
-        
-        // Only set error if ALL queries failed
         if (!idResult.data && !codeResult.data && !phoneResult.data) {
           fetchErr = idResult.error || codeResult.error || phoneResult.error;
         }
-        
-        console.log('🔍 [AgentManagement] ID result:', idResult.data);
-        console.log('🔍 [AgentManagement] Code result:', codeResult.data);
-        console.log('🔍 [AgentManagement] Phone result:', phoneResult.data);
       }
 
       if (!data) { 
-        console.log('⚠️ [AgentManagement] No user found for:', trimmed);
         setError("User not found. Try phone, 6-digit invite code, or UUID."); 
         return; 
       }
       const user = data as any;
 
-      // Count direct members via referred_by
-      const { count: directCount } = await (adminSupabase as any)
-        .from("users")
-        .select("id", { count: "exact", head: true })
-        .eq("referred_by", user.id);
+      // Fetch dashboard stats using RPC
+      let stats = {};
+      try {
+        // Try new correct function first
+        const { data: dashStats, error: dashError } = await (adminSupabase as any)
+          .rpc("get_agent_stats_simple", { p_agent_id: user.id });
+        
+        if (!dashError && dashStats && dashStats.length > 0) {
+          stats = dashStats[0];
+        } else {
+          // Fallback to old function
+          const { data: oldStats, error: oldError } = await (adminSupabase as any)
+            .rpc("get_agent_dashboard_stats", { p_agent_id: user.id });
+          
+          if (oldError) throw oldError;
+          stats = oldStats?.[0] || {};
+        }
+      } catch (err) {
+        console.error('Error fetching dashboard stats:', err);
+        stats = {};
+      }
 
-      // Fetch invited members (users who have this agent's invite_code as referred_by)
-      const { data: invitedMembers } = await (adminSupabase as any)
-        .from("users")
-        .select("id, invite_code, phone_number, created_at, total_deposit, total_bets")
-        .eq("referred_by", user.id)
-        .order("created_at", { ascending: false })
-        .limit(50);
+      // Fetch team deposits using RPC
+      const { data: teamDepositData, error: teamError } = await (adminSupabase as any)
+        .rpc("get_agent_team_deposits", { p_agent_id: user.id });
+      
+      if (teamError) throw teamError;
+      const teamDeposits = teamDepositData?.[0] || {};
+
+      // Fetch invited members with CORRECT function
+      const { data: invitedMembers, error: invitedError } = await (adminSupabase as any)
+        .rpc('get_agent_members_with_deposits', { p_agent_id: user.id });
+      
+      if (invitedError) {
+        console.error('Error fetching invited members:', invitedError);
+        // Fallback to direct query
+        const { data: simpleMembers } = await (adminSupabase as any)
+          .from("users")
+          .select("id, referral_code, phone_number, created_at, total_deposit, total_bets")
+          .eq("referred_by", user.id)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        
+        setAgentData({
+          id:                   user.id,
+          phone:                user.phone_number || "",
+          main_balance:         Number(user.main_balance ?? 0),
+          game_balance:         Number(user.game_balance ?? 0),
+          vip_level:            user.vip_level || 0,
+          invite_code:          user.referral_code || "",
+          total_bets:           Number(stats.total_bets ?? 0),
+          created_at:           user.created_at || "",
+          direct_members:       Number(stats.total_members ?? 0),
+          team_members:         Number(stats.total_members ?? 0),
+          yesterday_commission: Number(stats.today_commission ?? 0),
+          status:               "active",
+          is_agent:             Boolean(user.is_agent),
+          invited_members:      (simpleMembers || []).map((m: any) => ({
+            id:           m.id,
+            invite_code:  m.referral_code || "",
+            phone_number: m.phone_number || "",
+            created_at:   m.created_at || "",
+            total_deposit: Number(m.total_deposit || 0),
+            total_bets:   Number(m.total_bets || 0),
+          })),
+        });
+        setMobileTab("details");
+        return;
+      }
 
       setAgentData({
         id:                   user.id,
@@ -183,24 +222,25 @@ export function AgentManagement() {
         game_balance:         Number(user.game_balance ?? 0),
         vip_level:            user.vip_level || 0,
         invite_code:          user.referral_code || "",
-        total_bets:           0,
+        total_bets:           Number(stats.total_bets ?? 0),
         created_at:           user.created_at || "",
-        direct_members:       Number(directCount ?? 0),
-        team_members:         0,
-        yesterday_commission: 0,
+        direct_members:       Number(stats.total_members ?? stats.total_members ?? 0),
+        team_members:         Number(stats.total_members ?? stats.total_members ?? 0),
+        yesterday_commission: Number(stats.today_commission ?? stats.today_commission ?? 0),
         status:               "active",
         is_agent:             Boolean(user.is_agent),
         invited_members:      (invitedMembers || []).map((m: any) => ({
-          id:           m.id,
-          invite_code:  m.referral_code || "",
-          phone_number: m.phone_number || "",
-          created_at:   m.created_at || "",
-          total_deposit: Number(m.total_deposit || 0),
+          id:           m.member_id,
+          invite_code:  m.member_uid || "",
+          phone_number: m.member_phone || "",
+          created_at:   m.joined_at || "",
+          total_deposit: Number(m.lifetime_deposit || 0),
           total_bets:   Number(m.total_bets || 0),
         })),
       });
       setMobileTab("details");
-    } catch {
+    } catch (err: any) {
+      console.error("Error fetching agent:", err);
       setError("Failed to fetch user data.");
     } finally {
       setLoading(false);
@@ -252,11 +292,24 @@ export function AgentManagement() {
     if (!agentData) return;
     setFraudLoading(true); setFraudResult(null);
     try {
-      const { data, error } = await (adminSupabase as any).rpc("analyze_agent_network_fraud", {
-        p_agent_id: agentData.id,
-      });
+      // Call the fixed analyze_agent_network_fraud RPC
+      const { data, error } = await (adminSupabase as any)
+        .rpc("analyze_agent_network_fraud", { p_agent_id: agentData.id });
+      
       if (error) throw error;
-      setFraudResult(data);
+
+      // The RPC returns an array with one row
+      const result = data?.[0] || {};
+      
+      setFraudResult({
+        total_network_accounts: result.total_network_accounts || 0,
+        unique_genuine_profiles: result.unique_genuine_profiles || 0,
+        today_deposits: result.today_deposits || 0,
+        today_withdrawals: result.today_withdrawals || 0,
+        lifetime_deposits: result.lifetime_deposits || 0,
+        lifetime_withdrawals: result.lifetime_withdrawals || 0,
+        flagged_accounts: result.flagged_accounts || []
+      });
       setShowFraudModal(true);
     } catch (err: any) {
       alert("Fraud analysis failed: " + (err?.message || "Unknown error"));
@@ -359,8 +412,8 @@ export function AgentManagement() {
       <div className="grid grid-cols-3 gap-3">
         {[
           { label: "Direct Members", value: agentData.direct_members, color: "text-white" },
-          { label: "Team Members",   value: agentData.team_members,   color: "text-white" },
-          { label: "Commission",     value: `Rs ${agentData.yesterday_commission.toLocaleString()}`, color: "text-orange-500" },
+          { label: "Active Members",   value: agentData.team_members,   color: "text-green-400" },
+          { label: "Today Commission",     value: `Rs ${agentData.yesterday_commission.toLocaleString()}`, color: "text-orange-500" },
         ].map(s => (
           <div key={s.label} className="bg-gradient-to-br from-[#1a1a2e] to-[#16213e] rounded-xl p-4 border border-[#0f3460] shadow-lg">
             <p className="text-gray-400 text-xs mb-1">{s.label}</p>
@@ -425,7 +478,7 @@ export function AgentManagement() {
             {agentData.invited_members.map((member) => (
               <div key={member.id} className="bg-[#0f3460] border border-[#1a5f7a] rounded-lg p-3">
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-orange-500 font-bold text-xs font-mono">UID: {member.invite_code}</span>
+                  <span className="text-orange-500 font-bold text-xs font-mono">UID: {member.invite_code || '000000000'}</span>
                   <span className="text-gray-400 text-[10px]">{new Date(member.created_at).toLocaleDateString()}</span>
                 </div>
                 <div className="text-gray-300 text-xs mb-1">Phone: {member.phone_number || "N/A"}</div>

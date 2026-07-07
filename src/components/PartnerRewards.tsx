@@ -73,17 +73,17 @@ export default function PartnerRewards({ onBack }: { onBack: () => void }) {
         // Count effective invitations (users with deposits > 0)
         const effectiveCount = directUsers?.filter((u: any) => (u.total_deposit || 0) > 0).length || 0;
 
-        // Fetch total bonus from transactions
-        const { data: transactions, error: txError } = await supabase
+        // Fetch total commission from transactions (type = 'commission', not 'deposit')
+        const { data: commissions, error: commError } = await supabase
           .from("transactions")
-          .select("bonus")
+          .select("amount")
           .eq("user_id", uid)
-          .eq("type", "deposit")
+          .eq("type", "commission")
           .eq("status", "completed");
 
-        if (txError) throw txError;
+        if (commError) throw commError;
 
-        const totalBonus = transactions?.reduce((sum, tx: any) => sum + (tx.bonus || 0), 0) || 0;
+        const totalBonus = commissions?.reduce((sum, tx: any) => sum + (tx.amount || 0), 0) || 0;
 
         setStats({
           invitation_count: invitationCount,

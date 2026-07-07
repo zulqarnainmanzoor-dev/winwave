@@ -17,9 +17,9 @@ export default function Deposit({
   onBack: () => void;
   onTransactionClick: () => void;
 }) {
-  // Safe Destructuring with Fallbacks to prevent white screen crashes
   const userContext = useUser();
   const balance = userContext?.balance ?? 0;
+  const uid = userContext?.uid;
   const selectedPaymentMethod = userContext?.selectedPaymentMethod ?? "jazzcash";
   const setSelectedPaymentMethod = userContext?.setSelectedPaymentMethod ?? (() => {});
 
@@ -29,8 +29,8 @@ export default function Deposit({
   const [amount, setAmount] = useState<string>("300");
   const [selectedAmount, setSelectedAmount] = useState<number | null>(300);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Preset amounts with 2% bonus calculation for UI
   const quickAmounts = [
     { value: 300, bonus: 6 },
     { value: 500, bonus: 10 },
@@ -46,40 +46,7 @@ export default function Deposit({
     { value: 50000, bonus: 1000 },
   ];
 
-  // JazzCash PKPay Gateway Links per amount
-  const jazzcashLinks: Record<number, string> = {
-    300: "https://cashier.pkpay.click/pay/8fb65585df22bb6c",
-    500: "https://cashier.pkpay.click/pay/7099555e5d96948a",
-    800: "https://cashier.pkpay.click/pay/b40a681c9347518b",
-    1000: "https://cashier.pkpay.click/pay/e6adf22d1645a3c1",
-    2000: "https://cashier.pkpay.click/pay/c9c08cd3ac807b7b",
-    3000: "https://cashier.pkpay.click/pay/2e2843558794d95a",
-    5000: "https://cashier.pkpay.click/pay/9e1931ee76a1c7be",
-    8000: "https://cashier.pkpay.click/pay/3b953ec0d8c699cb",
-    10000: "https://cashier.pkpay.click/pay/bfa519a4a3557a4e",
-    20000: "https://cashier.pkpay.click/pay/c0346b6c6f66d9e1",
-    30000: "https://cashier.pkpay.click/pay/46ed4014c01a2dd2",
-    50000: "https://cashier.pkpay.click/pay/aa3071795294a6ed"
-  };
-
-  // Easypaisa fixed links mapping (amount -> url)
-  const EASY_PAISA_LINKS: Record<number, string> = {
-    50000: "https://cashier.pkpay.click/pay/387931f98134400e",
-    30000: "https://cashier.pkpay.click/pay/67e964fd8f780f66",
-    20000: "https://cashier.pkpay.click/pay/443568805ecbdd84",
-    10000: "https://cashier.pkpay.click/pay/a9038d8ae209d6d7",
-    8000: "https://cashier.pkpay.click/pay/ba86795097ff5508",
-    5000: "https://cashier.pkpay.click/pay/10b2aad1347174b4",
-    3000: "https://cashier.pkpay.click/pay/efc061dbaff90b93",
-    2000: "https://cashier.pkpay.click/pay/4428560b30bfb6d1",
-    1000: "https://cashier.pkpay.click/pay/8ad27749f7849fae",
-    800: "https://cashier.pkpay.click/pay/d0c12155e83081d0",
-    500: "https://cashier.pkpay.click/pay/d74d75b92aa0c111",
-    300: "https://cashier.pkpay.click/pay/445f3a965fe98b38",
-  };
-
-  // For backwards-compatibility with older variable names used elsewhere
-  const easypaisaLinks = EASY_PAISA_LINKS;
+  const supportedAmounts = new Set([300, 500, 800, 1000, 2000, 3000, 5000, 8000, 10000, 20000, 30000, 50000]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -106,8 +73,7 @@ export default function Deposit({
     }
   };
 
-  // Payment Redirection Logic based on selected method
-  const handlePayNow = () => {
+  const handlePayNow = async () => {
     const amountToPay = selectedAmount || parseInt(amount);
 
     if (!amountToPay || isNaN(amountToPay)) {
@@ -115,39 +81,41 @@ export default function Deposit({
       return;
     }
 
-    // Get the correct payment link based on selected method
-    const links = selectedPaymentMethod === "easypaisa" ? easypaisaLinks : jazzcashLinks;
-    const targetUrl = links[amountToPay];
+    if (!uid) {
+      alert("User not authenticated. Please log in again.");
+      return;
+    }
 
-    if (targetUrl) {
-      // Extract order_id from PKPay URL (last part after /pay/)
-      const urlParts = targetUrl.split('/');
-      const orderId = urlParts[urlParts.length - 1];
-      
-      if (!orderId) {
-        window.location.href = targetUrl;
+    setIsLoading(true);
+
+    try {
+      console.log(`[Deposit] Creating checkout: amount=${amountToPay}, method=${selectedPaymentMethod}, userId=${uid}`);
+
+      const response = await fetch("/api/create-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: amountToPay,
+          method: selectedPaymentMethod,
+          userId: uid,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("[Deposit] Checkout creation failed:", data.error);
+        alert(`Failed to create checkout: ${data.error}`);
+        setIsLoading(false);
         return;
       }
 
-      // Create pending deposit_history record before redirect
-      try {
-        const userId = (userContext as any)?.uid || null;
-        if (!userId) {
-          window.location.href = targetUrl;
-          return;
-        }
-
-        // Note: In this component we don't have supabase client,
-        // so we'll redirect and let the webhook handle it
-        // The deposit will be created when webhook arrives
-        console.log(`Redirecting to PKPay with order_id: ${orderId}`);
-        window.location.href = targetUrl;
-      } catch (e) {
-        window.location.href = targetUrl;
-        return;
-      }
-    } else {
-      alert("Automated deposits are only available for fixed packages right now. Please select a supported quick amount for the selected gateway.");
+      console.log(`[Deposit] Checkout created: ${data.checkoutUrl}`);
+      window.location.href = data.checkoutUrl;
+    } catch (error) {
+      console.error("[Deposit] Exception:", error);
+      alert("An error occurred. Please try again.");
+      setIsLoading(false);
     }
   };
 
@@ -155,12 +123,10 @@ export default function Deposit({
     quickAmounts.find((q) => q.value === parseInt(amount))?.bonus || 0;
 
   const amountNum = selectedAmount || parseInt(amount);
-  const payLinks = selectedPaymentMethod === 'easypaisa' ? easypaisaLinks : jazzcashLinks;
-  const isAmountSupported = !!(amountNum && payLinks && payLinks[amountNum]);
+  const isAmountSupported = !!(amountNum && supportedAmounts.has(amountNum));
 
   return (
     <div className="flex-1 flex flex-col bg-[#05070e] h-screen overflow-y-auto relative text-white">
-      {/* Header */}
       <div className="flex items-center justify-between p-4 sticky top-0 bg-[#08101f] z-40 border-b border-white/10 shadow-sm">
         <ChevronLeft
           className="w-6 h-6 text-white cursor-pointer"
@@ -177,7 +143,6 @@ export default function Deposit({
       </div>
 
       <div className="p-4 space-y-4 pb-24">
-        {/* Balance Cards */}
         <div className="flex gap-3">
           <div className="flex-1 bg-[#0f172a] rounded-3xl p-4 relative overflow-hidden border border-white/10 shadow-[0_24px_48px_rgba(15,23,42,0.35)]">
             <div className="flex items-center gap-1 mb-2 relative z-10">
@@ -195,22 +160,6 @@ export default function Deposit({
                 {typeof balance === "number" ? balance.toFixed(2) : "0.00"}
               </span>
             </div>
-            <div className="absolute -bottom-4 -left-4 opacity-10">
-              <svg
-                width="80"
-                height="80"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
-                <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
-                <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
-              </svg>
-            </div>
           </div>
 
           <div className="flex-1 bg-[#0f172a] rounded-3xl p-4 relative overflow-hidden border border-white/10 shadow-[0_24px_48px_rgba(15,23,42,0.35)]">
@@ -225,26 +174,9 @@ export default function Deposit({
                 {typeof balance === "number" ? balance.toFixed(2) : "0.00"}
               </span>
             </div>
-            <div className="absolute -bottom-4 -left-4 opacity-10">
-              <svg
-                width="80"
-                height="80"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
-                <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
-                <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
-              </svg>
-            </div>
           </div>
         </div>
 
-        {/* Deposit Amount Input */}
         <div className="flex flex-col gap-2 mt-6">
           <span className="text-gray-400 text-sm">
             Deposit amount: Min: Rs300 Max: Rs50,000
@@ -275,7 +207,6 @@ export default function Deposit({
             <span className="text-[#60a5fa] font-bold">Rs{currentBonus}</span>
           </div>
 
-          {/* Bonus note */}
           <div className="text-xs text-green-300 mt-1">
             Get 2% Bonus on all deposits! {amount && !isNaN(Number(amount)) && (
               <span>Deposit {Number(amount).toLocaleString()} → Get {(Number(amount) * 1.02).toLocaleString()}</span>
@@ -283,9 +214,8 @@ export default function Deposit({
           </div>
         </div>
 
-        {/* Quick Amounts */}
         <div className="grid grid-cols-4 gap-2">
-          {(selectedPaymentMethod === 'easypaisa' ? quickAmounts.filter(q => EASY_PAISA_LINKS[q.value]) : quickAmounts).map((q) => {
+          {quickAmounts.map((q) => {
             const isSelected = selectedAmount === q.value;
             return (
               <button
@@ -305,7 +235,6 @@ export default function Deposit({
           })}
         </div>
 
-        {/* Payment Methods - Jazzcash & Easypaisa Only (USDT removed) */}
         <div className="mt-6">
           <div className="flex items-center gap-1 mb-3">
             <span className="text-white text-sm">Payment methods</span>
@@ -331,9 +260,7 @@ export default function Deposit({
                     className="w-12 h-12 object-contain"
                   />
                 </div>
-                <span
-                  className="font-bold text-sm text-white"
-                >
+                <span className="font-bold text-sm text-white">
                   Jazzcash
                 </span>
               </div>
@@ -359,9 +286,7 @@ export default function Deposit({
                     className="w-8 h-8 object-contain"
                   />
                 </div>
-                <span
-                  className="font-bold text-sm text-white"
-                >
+                <span className="font-bold text-sm text-white">
                   Easypaisa
                 </span>
               </div>
@@ -374,7 +299,6 @@ export default function Deposit({
           </div>
         </div>
 
-        {/* Deposit Tips */}
         <div className="mt-6 text-sm text-gray-300 space-y-3 font-medium">
           <p className="text-white font-bold mb-1">Deposit tips:</p>
           <p>1.Each deposit will be credited within 1-5 minutes</p>
@@ -395,21 +319,22 @@ export default function Deposit({
         </div>
       </div>
 
-      {/* Pay Now Button - Fixed Mobile Safe Zone with Neon Blue Glow */}
-<div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-4 bg-[#0c1933]/90 backdrop-blur-md z-50 border-t border-blue-500/20 pb-safe shadow-[0_-10px_25px_rgba(37,99,235,0.15)]">
-  <button
-    onClick={handlePayNow}
-    type="button"
-    disabled={!isAmountSupported}
-    className={`w-full text-white font-bold text-lg py-3.5 rounded-full transition-all duration-300 active:scale-[0.98] ${
-      isAmountSupported 
-        ? 'bg-[#3b82f6] hover:bg-[#2563eb] shadow-[0_0_20px_rgba(59,130,246,0.6)] hover:shadow-[0_0_28px_rgba(37,99,235,0.8)] border border-blue-400/40 text-glow' 
-        : 'bg-slate-700 opacity-40 cursor-not-allowed border border-white/5'
-    }`}
-  >
-    Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
-  </button>
-</div>
+      <div className="fixed bottom-[74px] left-0 right-0 z-40 px-4 max-w-md mx-auto pointer-events-none">
+        <div className="w-full flex justify-center pointer-events-auto">
+          <button
+            onClick={handlePayNow}
+            type="button"
+            disabled={!isAmountSupported || isLoading}
+            className={`w-11/12 max-w-xs text-white font-bold text-base py-3 rounded-full transition-all duration-300 active:scale-[0.97] border ${
+              isAmountSupported && !isLoading
+                ? "bg-[#1C2DFF] hover:bg-[#2563eb] border-blue-400/40 shadow-[0_0_18px_rgba(28,45,255,0.6)] hover:shadow-[0_0_25px_rgba(37,99,235,0.8)] cursor-pointer"
+                : "bg-slate-800/90 border-white/5 opacity-50 cursor-not-allowed"
+            }`}
+          >
+            {isLoading ? "Creating checkout..." : `Pay with ${selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

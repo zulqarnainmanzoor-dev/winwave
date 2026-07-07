@@ -107,7 +107,7 @@ export interface VipTier {
 }
 
 export const VIP_TIERS: VipTier[] = [
-  { level: 0, requiredWager: 125000, maintenance: 0, weeklyReward: 0, monthlyReward: 0, levelUpReward: 0 },
+  { level: 0, requiredWager: 62500, maintenance: 0, weeklyReward: 0, monthlyReward: 0, levelUpReward: 0 },
   { level: 1, requiredWager: 250000, maintenance: 62500, weeklyReward: 10, monthlyReward: 150, levelUpReward: 150 },
   { level: 2, requiredWager: 500000, maintenance: 112500, weeklyReward: 20, monthlyReward: 350, levelUpReward: 150 },
   { level: 3, requiredWager: 1000000, maintenance: 225000, weeklyReward: 30, monthlyReward: 750, levelUpReward: 300 },
@@ -148,7 +148,7 @@ export function computeVipProgress(vipLevel: number, wageredAmount: number): num
 }
 
 export function getVipLevelFromWager(wager: number): number {
-  if (wager < 125000) return 0;
+  if (wager < 62500) return 0;
   if (wager < 250000) return 1;
   if (wager < 500000) return 2;
   if (wager < 1000000) return 3;

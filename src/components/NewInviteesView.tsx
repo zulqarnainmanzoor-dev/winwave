@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { ChevronLeft, AlertCircle, ChevronRight } from "lucide-react";
 import { useUser } from "../context/UserContext";
-import { supabase } from "../lib/supabaseClient";
+import { adminSupabase } from "../lib/adminSupabase";
 
 interface Invitee {
   id: string;
@@ -57,7 +57,7 @@ export default function NewInviteesView({ onBack }: { onBack: () => void }) {
       const offset = page * PAGE_SIZE;
 
       try {
-        let query = (supabase as any)
+        let query = (adminSupabase as any)
           .from('users')
           .select('id, phone_number, referral_code, invite_code, created_at', { count: 'exact' })
           .eq('referred_by', uid)
@@ -77,7 +77,18 @@ export default function NewInviteesView({ onBack }: { onBack: () => void }) {
         if (cancelled) return;
         if (error) throw error;
 
-        const rows = (data || []) as Invitee[];
+        const rows = (data || []).map((u: any) => {
+          // Use 9-digit numeric UID from referral_code
+          const numericUid = u.referral_code || '000000000';
+          
+          return {
+            id: u.id,
+            phone_number: u.phone_number,
+            referral_code: u.referral_code,
+            invite_code: numericUid, // Store 9-digit numeric UID
+            created_at: u.created_at,
+          };
+        }) as Invitee[];
         setInvitees(page === 0 ? rows : (prev) => [...prev, ...rows]);
         setHasMore((rows.length || 0) === PAGE_SIZE);
       } catch (queryError: any) {
