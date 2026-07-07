@@ -27,15 +27,19 @@ router.post('/', async (req: any, res) => {
     console.log(`[create-checkout] Generated order_id: ${orderId}`);
 
     // Create deposit record with explicit values
+    // Normalize values to match expected DB enum/constraints
+    // (frontend sends method as lowercase: jazzcash/easypaisa)
+    const normalizedMethod = String(method).toLowerCase();
+
     const depositData = {
       user_id: userId,
       amount: Number(amount),
-      method: String(method).toUpperCase(),
+      method: normalizedMethod,
       order_id: orderId,
       pkpay_order_id: null,
       gateway_ref: null,
       status: 'pending',
-      remarks: `PKPay deposit via ${String(method).toUpperCase()}. Amount Rs ${amount}`,
+      remarks: `PKPay deposit via ${normalizedMethod.toUpperCase()}. Amount Rs ${amount}`,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
@@ -50,16 +54,21 @@ router.post('/', async (req: any, res) => {
 
     if (depositError) {
       console.error('[create-checkout] Failed to create deposit record:', depositError);
-      console.error('[create-checkout] Error details:', JSON.stringify(depositError));
-      return res.status(500).json({ error: `Failed to create deposit: ${depositError.message}` });
-    }
+
+      // Log the insert payload and the raw error for fast debugging (406/409 are usually constraint/RLS issues)
+      console.error('[create-checkout] Deposit insert payload:', JSON.stringify(depositData));
 
     console.log(`[create-checkout] ✅ Deposit record created: ${deposit.id}`);
 
     // Create PKPay checkout
+        status: (depositError as any)?.status,
     const returnUrl = `${process.env.APP_URL || 'https://winclub-officiall.vercel.app'}/#/deposit-return?order_id=${orderId}`;
-    const notifyUrl = `${process.env.API_URL || 'https://winclub-officiall.vercel.app/api'}/webhook/deposit`;
 
+    const notifyUrl = `${process.env.API_URL || 'https://winclub-officiall.vercel.app/api'}/webhook/deposit`;
+        error: `Failed to create deposit record: ${depositError.message}`,
+
+      });
+    }
     const checkoutResult = await createPKPayCheckout({
       amount,
       orderId,

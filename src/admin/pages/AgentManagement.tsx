@@ -106,6 +106,13 @@ export function AgentManagement() {
     setError(""); setAgentData(null); setLoading(true);
     try {
       const trimmed = agentUID.trim();
+
+      // Guard: empty input would produce an invalid query (id=eq. → 400)
+      if (!trimmed) {
+        setError("Please enter a UID, phone number, or invite code.");
+        return;
+      }
+
       const isUUID       = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
       const isPhone      = /^\d{10,15}$/.test(trimmed);
       const isInviteCode = /^[a-zA-Z0-9]{4,12}$/.test(trimmed) && !isUUID && !isPhone;
@@ -139,80 +146,66 @@ export function AgentManagement() {
         }
       }
 
+      if (fetchErr) throw fetchErr;
       if (!data) { 
         setError("User not found. Try phone, 6-digit invite code, or UUID."); 
         return; 
       }
       const user = data as any;
 
-      // Fetch dashboard stats using RPC
+      // Fetch dashboard stats using RPC (resilient: never throw on missing function)
       let stats: { total_bets?: number; total_members?: number; today_commission?: number } = {};
       try {
-        // Try new correct function first
         const { data: dashStats, error: dashError } = await (adminSupabase as any)
           .rpc("get_agent_stats_simple", { p_agent_id: user.id });
         
         if (!dashError && dashStats && dashStats.length > 0) {
           stats = dashStats[0];
-        } else {
+        } else if (dashError) {
           // Fallback to old function
           const { data: oldStats, error: oldError } = await (adminSupabase as any)
             .rpc("get_agent_dashboard_stats", { p_agent_id: user.id });
           
-          if (oldError) throw oldError;
-          stats = oldStats?.[0] || {};
+          if (!oldError && oldStats && oldStats.length > 0) {
+            stats = oldStats[0];
+          } else {
+            console.warn('Dashboard stats RPC unavailable, using defaults:', oldError?.message || dashError?.message);
+          }
         }
       } catch (err) {
-        console.error('Error fetching dashboard stats:', err);
-        stats = {};
+        console.warn('Error fetching dashboard stats:', err);
       }
 
-      // Fetch team deposits using RPC
-      const { data: teamDepositData, error: teamError } = await (adminSupabase as any)
-        .rpc("get_agent_team_deposits", { p_agent_id: user.id });
-      
-      if (teamError) throw teamError;
-      const teamDeposits = teamDepositData?.[0] || {};
+      // Fetch invited members (resilient: fall back to direct query on any error)
+      let invitedMembers: any[] | null = null;
+      try {
+        const { data: members, error: membersError } = await (adminSupabase as any)
+          .rpc('get_agent_members_with_deposits', { p_agent_id: user.id });
+        if (!membersError && members) {
+          invitedMembers = members;
+        } else {
+          console.warn('get_agent_members_with_deposits unavailable, using direct query:', membersError?.message);
+        }
+      } catch (err) {
+        console.warn('Error fetching invited members via RPC:', err);
+      }
 
-      // Fetch invited members with CORRECT function
-      const { data: invitedMembers, error: invitedError } = await (adminSupabase as any)
-        .rpc('get_agent_members_with_deposits', { p_agent_id: user.id });
-      
-      if (invitedError) {
-        console.error('Error fetching invited members:', invitedError);
-        // Fallback to direct query
+      // If RPC failed, fall back to a direct query against the users table
+      if (invitedMembers === null) {
         const { data: simpleMembers } = await (adminSupabase as any)
           .from("users")
           .select("id, referral_code, phone_number, created_at, total_deposit, total_bets")
           .eq("referred_by", user.id)
           .order("created_at", { ascending: false })
           .limit(50);
-        
-        setAgentData({
-          id:                   user.id,
-          phone:                user.phone_number || "",
-          main_balance:         Number(user.main_balance ?? 0),
-          game_balance:         Number(user.game_balance ?? 0),
-          vip_level:            user.vip_level || 0,
-          invite_code:          user.referral_code || "",
-          total_bets:           Number(stats.total_bets ?? 0),
-          created_at:           user.created_at || "",
-          direct_members:       Number(stats.total_members ?? 0),
-          team_members:         Number(stats.total_members ?? 0),
-          yesterday_commission: Number(stats.today_commission ?? 0),
-          status:               "active",
-          is_agent:             Boolean(user.is_agent),
-          invited_members:      (simpleMembers || []).map((m: any) => ({
-            id:           m.id,
-            invite_code:  m.referral_code || "",
-            phone_number: m.phone_number || "",
-            created_at:   m.created_at || "",
-            total_deposit: Number(m.total_deposit || 0),
-            total_bets:   Number(m.total_bets || 0),
-          })),
-        });
-        setMobileTab("details");
-        return;
+        invitedMembers = (simpleMembers || []).map((m: any) => ({
+          member_id:     m.id,
+          member_uid:    m.referral_code || "",
+          member_phone:  m.phone_number || "",
+          joined_at:     m.created_at || "",
+          lifetime_deposit: Number(m.total_deposit || 0),
+          total_bets:    Number(m.total_bets || 0),
+        }));
       }
 
       setAgentData({
@@ -224,24 +217,24 @@ export function AgentManagement() {
         invite_code:          user.referral_code || "",
         total_bets:           Number(stats.total_bets ?? 0),
         created_at:           user.created_at || "",
-        direct_members:       Number(stats.total_members ?? stats.total_members ?? 0),
-        team_members:         Number(stats.total_members ?? stats.total_members ?? 0),
-        yesterday_commission: Number(stats.today_commission ?? stats.today_commission ?? 0),
+        direct_members:       Number(stats.total_members ?? 0),
+        team_members:         Number(stats.total_members ?? 0),
+        yesterday_commission: Number(stats.today_commission ?? 0),
         status:               "active",
         is_agent:             Boolean(user.is_agent),
         invited_members:      (invitedMembers || []).map((m: any) => ({
-          id:           m.member_id,
-          invite_code:  m.member_uid || "",
-          phone_number: m.member_phone || "",
-          created_at:   m.joined_at || "",
-          total_deposit: Number(m.lifetime_deposit || 0),
-          total_bets:   Number(m.total_bets || 0),
+          id:            m.member_id ?? m.id,
+          invite_code:   m.member_uid ?? m.referral_code ?? "",
+          phone_number:  m.member_phone ?? m.phone_number ?? "",
+          created_at:    m.joined_at ?? m.created_at ?? "",
+          total_deposit: Number(m.lifetime_deposit ?? m.total_deposit ?? 0),
+          total_bets:    Number(m.total_bets ?? m.total_bets ?? 0),
         })),
       });
       setMobileTab("details");
     } catch (err: any) {
       console.error("Error fetching agent:", err);
-      setError("Failed to fetch user data.");
+      setError("Failed to fetch user data. " + (err?.message ? `(${err.message})` : ""));
     } finally {
       setLoading(false);
     }

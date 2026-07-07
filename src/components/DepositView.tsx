@@ -144,14 +144,13 @@ export default function DepositView({
       }
 
       try {
-        // Check if pending deposit already exists for this order_id
         const { data: existingDeposit, error: checkError } = await (supabase as any)
           .from('deposit_history')
           .select('id, status')
           .eq('order_id', orderId)
           .eq('user_id', userId)
           .eq('status', 'pending')
-          .single();
+          .maybeSingle();
 
         if (existingDeposit) {
           console.log(`[DepositView] Pending deposit already exists for order_id=${orderId}. Redirecting to payment gateway.`);
@@ -161,6 +160,7 @@ export default function DepositView({
 
         console.log(`[DepositView] Creating deposit_history: user_id=${userId}, order_id=${orderId}, amount=${amountToPay}, method=${selectedPaymentMethod}`);
         
+        // FIXED: Only insert columns that definitely exist in the table
         const { data, error } = await (supabase as any)
           .from('deposit_history')
           .insert([{
@@ -168,10 +168,8 @@ export default function DepositView({
             amount: amountToPay,
             method: selectedPaymentMethod.toUpperCase(),
             order_id: orderId,
-            pkpay_order_id: null,
             gateway_ref: targetUrl,
             status: 'pending',
-            remarks: `PKPay deposit via ${selectedPaymentMethod.toUpperCase()}. Amount Rs ${amountToPay}`,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           }]);
@@ -179,6 +177,14 @@ export default function DepositView({
         if (error) {
           console.error('[DepositView] FAILED to create deposit_history:', error);
           console.error('Details:', { userId, orderId, amount: amountToPay, method: selectedPaymentMethod });
+          
+          // Check if it's a duplicate key error (409)
+          if (error.code === '23505' || error.message?.includes('duplicate')) {
+            console.log('[DepositView] Duplicate order_id detected. Redirecting to payment gateway anyway.');
+            window.location.href = targetUrl;
+            return;
+          }
+          
           alert('Failed to create deposit record. Please try again.');
           return;
         }
