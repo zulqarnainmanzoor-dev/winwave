@@ -54,21 +54,17 @@ router.post('/', async (req: any, res) => {
 
     if (depositError) {
       console.error('[create-checkout] Failed to create deposit record:', depositError);
-
-      // Log the insert payload and the raw error for fast debugging (406/409 are usually constraint/RLS issues)
       console.error('[create-checkout] Deposit insert payload:', JSON.stringify(depositData));
+      return res.status(depositError.status || 500).json({
+        error: `Failed to create deposit record: ${depositError.message}`,
+      });
+    }
 
     console.log(`[create-checkout] ✅ Deposit record created: ${deposit.id}`);
 
     // Create PKPay checkout
-        status: (depositError as any)?.status,
     const returnUrl = `${process.env.APP_URL || 'https://winclub-officiall.vercel.app'}/#/deposit-return?order_id=${orderId}`;
-
     const notifyUrl = `${process.env.API_URL || 'https://winclub-officiall.vercel.app/api'}/webhook/deposit`;
-        error: `Failed to create deposit record: ${depositError.message}`,
-
-      });
-    }
     const checkoutResult = await createPKPayCheckout({
       amount,
       orderId,
