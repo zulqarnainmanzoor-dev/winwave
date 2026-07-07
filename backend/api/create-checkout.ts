@@ -4,9 +4,9 @@ import { createPKPayCheckout } from '../lib/pkpay-api';
 
 const router = Router();
 
-router.post('/', async (req, res) => {
+router.post('/', async (req: any, res) => {
   const { amount, method } = req.body;
-  const userId = req.user?.id; // From auth middleware
+  const userId = req.user?.id || req.body.userId; // From auth middleware or body
 
   if (!userId) {
     return res.status(401).json({ error: 'Unauthorized' });

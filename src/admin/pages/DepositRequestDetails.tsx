@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { ChevronLeft, ChevronDown, Copy, Check, AlertCircle } from "lucide-react";
-import { adminSupabase } from "../lib/adminSupabase";
+import { adminSupabase } from "../../lib/adminSupabase";
 
 interface DepositRequest {
   id: string;
