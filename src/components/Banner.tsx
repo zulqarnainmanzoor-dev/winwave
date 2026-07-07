@@ -63,46 +63,11 @@ export default function Banner() {
     setDragDistance(0);
   };
 
-  const slides: SlideData[] = [
-    {
-      id: 1,
-      image: "/assets/banners/Join Win wave as an Agent.jpeg",
-      fallbackImage: "/assets/banners/Winwave Code Bonus.jpeg",
-    },
-    {
-      id: 2,
-      image: "/assets/banners/VIP Rebate Bonus.jpeg",
-      fallbackImage: "/assets/banners/Winwave Code Bonus.jpeg",
-    },
-    {
-      id: 3,
-      image: "/assets/banners/Winning Information of WinGo.png",
-      fallbackImage: "/assets/banners/Winwave Code Bonus.jpeg",
-    },
-    {
-      id: 4,
-      image: "/assets/banners/Winning information of Casino.png",
-      fallbackImage: "/assets/banners/Winwave Code Bonus.jpeg",
-    },
-    {
-      id: 5,
-      image: "/assets/banners/Winning Information of K3.png",
-      fallbackImage: "/assets/banners/Winwave Code Bonus.jpeg",
-    },
-    {
-      id: 6,
-      image: "/assets/banners/Winwave Code Bonus.jpeg",
-      fallbackImage: "/assets/banners/Join Win wave as an Agent.jpeg",
-    },
-    {
-      id: 7,
-      image: "/assets/banners/scam Alert.jpeg",
-      fallbackImage: "/assets/banners/Join Win wave as an Agent.jpeg",
-    },
-  ];
+  const slides: SlideData[] = [];
 
   // Infinite sliding loop - Slower pace as requested
   useEffect(() => {
+    if (slides.length === 0) return;
     const timer = setInterval(() => {
       setCurrentIndex((prev) => (prev + 1) % slides.length);
     }, 5000);
@@ -112,6 +77,8 @@ export default function Banner() {
   const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
     e.currentTarget.src = "/assets/banner.png";
   };
+
+  if (slides.length === 0) return null;
 
   return (
     <div className="px-4 py-4">

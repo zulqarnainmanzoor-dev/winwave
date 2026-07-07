@@ -76,19 +76,22 @@ export function AgentManagement() {
       try {
         const { data, error } = await (adminSupabase as any)
           .from("users")
-          .select("id, phone_number, invite_code, main_balance, game_balance, created_at, is_agent")
+          .select("id, phone_number, referral_code, main_balance, game_balance, created_at, is_agent")
           .eq("is_agent", true)
           .order("created_at", { ascending: false })
           .limit(50);
         if (error) throw error;
-        setAgents((data || []).map((row: any) => ({
-          id:           row.id,
-          phone:        row.phone_number || "",
-          username:     `AGENT_${(row.invite_code || row.id.replace(/-/g, "").slice(0, 6)).toUpperCase()}`,
-          uid:          row.invite_code || row.id.replace(/-/g, "").slice(0, 6).toUpperCase(),
-          main_balance: Number(row.main_balance ?? 0),
-          game_balance: Number(row.game_balance ?? 0),
-        })));
+        setAgents((data || []).map((row: any) => {
+          const realUID = row.referral_code || '';
+          return {
+            id:           row.id,
+            phone:        row.phone_number || "",
+            username:     realUID,
+            uid:          realUID,
+            main_balance: Number(row.main_balance ?? 0),
+            game_balance: Number(row.game_balance ?? 0),
+          };
+        }));
       } catch (err) {
         console.warn("Failed to load agents", err);
       } finally {
@@ -110,7 +113,7 @@ export function AgentManagement() {
 
       let q = (adminSupabase as any)
         .from("users")
-        .select("id, phone_number, invite_code, main_balance, game_balance, vip_level, created_at, is_agent");
+        .select("id, phone_number, referral_code, main_balance, game_balance, vip_level, created_at, is_agent");
 
       let data: any = null;
       let fetchErr: any = null;
@@ -120,23 +123,22 @@ export function AgentManagement() {
         const result = await q.eq("id", trimmed).maybeSingle();
         ({ data, error: fetchErr } = result);
       } else if (isInviteCode) {
-        // Search by exact invite code
-        const result = await q.eq("invite_code", trimmed).maybeSingle();
+        // Search by exact referral code (real UID)
+        const result = await q.eq("referral_code", trimmed).maybeSingle();
         ({ data, error: fetchErr } = result);
       } else if (isPhone) {
         // Search by exact phone number
         const result = await q.eq("phone_number", trimmed).maybeSingle();
         ({ data, error: fetchErr } = result);
       } else {
-        // Search by id, invite_code, or phone_number using separate queries
-        // Must create separate query objects to avoid combining filters
-        console.log('🔍 [AgentManagement] Searching by id, invite_code, phone_number separately');
+        // Search by id, referral_code, or phone_number using separate queries
+        console.log('🔍 [AgentManagement] Searching by id, referral_code, phone_number separately');
         
-        const baseSelect = "id, phone_number, invite_code, main_balance, game_balance, vip_level, created_at, is_agent";
+        const baseSelect = "id, phone_number, referral_code, main_balance, game_balance, vip_level, created_at, is_agent";
         
         const [idResult, codeResult, phoneResult] = await Promise.all([
           (adminSupabase as any).from("users").select(baseSelect).eq("id", trimmed).maybeSingle(),
-          (adminSupabase as any).from("users").select(baseSelect).eq("invite_code", trimmed).maybeSingle(),
+          (adminSupabase as any).from("users").select(baseSelect).eq("referral_code", trimmed).maybeSingle(),
           (adminSupabase as any).from("users").select(baseSelect).eq("phone_number", trimmed).maybeSingle()
         ]);
 
@@ -180,7 +182,7 @@ export function AgentManagement() {
         main_balance:         Number(user.main_balance ?? 0),
         game_balance:         Number(user.game_balance ?? 0),
         vip_level:            user.vip_level || 0,
-        invite_code:          user.invite_code || "",
+        invite_code:          user.referral_code || "",
         total_bets:           0,
         created_at:           user.created_at || "",
         direct_members:       Number(directCount ?? 0),
@@ -190,7 +192,7 @@ export function AgentManagement() {
         is_agent:             Boolean(user.is_agent),
         invited_members:      (invitedMembers || []).map((m: any) => ({
           id:           m.id,
-          invite_code:  m.invite_code || "",
+          invite_code:  m.referral_code || "",
           phone_number: m.phone_number || "",
           created_at:   m.created_at || "",
           total_deposit: Number(m.total_deposit || 0),
@@ -221,7 +223,8 @@ export function AgentManagement() {
       setAgentData({ ...agentData, is_agent: true });
       setAgents(prev => {
         if (prev.find(a => a.id === agentData.id)) return prev;
-        return [{ id: agentData.id, phone: agentData.phone, username: `AGENT_${agentData.invite_code.toUpperCase()}`, uid: agentData.invite_code, main_balance: agentData.main_balance, game_balance: agentData.game_balance }, ...prev];
+        const realUID = agentData.invite_code || '';
+        return [{ id: agentData.id, phone: agentData.phone, username: realUID, uid: realUID, main_balance: agentData.main_balance, game_balance: agentData.game_balance }, ...prev];
       });
     } catch (err: any) {
       alert("Failed to convert: " + (err?.message || "Unknown error"));

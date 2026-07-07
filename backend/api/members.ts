@@ -19,5 +19,3 @@ router.get('/', async (req, res) => {
     return res.status(500).json({ error: 'Failed to load members' });
   }
 });
-
-export default router;

@@ -3,13 +3,16 @@ import { supabase } from '../database/db';
 import registerRouter from './register';
 import membersRouter from './members';
 import depositWebhookHandler from './deposit-webhook';
+import webhookDebugHandler from './webhook-debug';
+import verifyDepositRouter from './verify-deposit';
 import walletRouter from './wallet';
 import withdrawRouter from './withdraw';
 import wingoRouter from './wingo';
 import payoutRouter from './payout';
 import referralStatsRouter from './referral-stats';
+import claimCommissionRouter from './claim-commission';
 import { getDeviceContext, logSecurityEvent } from './security';
-import webhookTestRouter from './webhook-test';
+import createCheckoutRouter from './create-checkout';
 
 // Startup log: canonical public webhook endpoint for PKPay deposit
 console.log("PKPay Deposit Webhook:", "/api/webhook/deposit");
@@ -21,8 +24,11 @@ const router = Router();
 // SPECIFIC ROUTES FIRST (before catch-all registerRouter)
 router.use('/members', membersRouter);
 router.post('/webhook/deposit', depositWebhookHandler);
+router.post('/webhook/debug', webhookDebugHandler);
+router.post('/verify-deposit', verifyDepositRouter);
 router.use('/payout', payoutRouter);
-router.use('/webhook/test', webhookTestRouter);
+router.post('/create-checkout', createCheckoutRouter);
+router.use('/claim-commission', claimCommissionRouter);
 
 // Legacy compatibility alias
 router.post('/webhooks/pkpay', (req, res, next) => {

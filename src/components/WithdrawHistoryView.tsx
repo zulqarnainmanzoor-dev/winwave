@@ -76,7 +76,7 @@ export default function WithdrawHistoryView({ onBack }: { onBack: () => void }) 
       // gateway_ref, reason, remarks, created_at, updated_at
       const { data, error } = await supabase
         .from("withdrawal_history")
-        .select("id, amount, method, account_no, account_name, status, created_at, remarks, reason, user_id")
+        .select("id, amount, method, account_name, account_no, status, created_at, remarks, reason, user_id")
         .eq("user_id", uid)
         .gte("created_at", since.toISOString())
         .order("created_at", { ascending: false })

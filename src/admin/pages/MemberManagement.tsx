@@ -18,6 +18,7 @@ interface Member {
   ipAddresses: string[];
   deviceIds: string[];
   status: "active" | "suspended" | "banned";
+  referral_code: string;
 }
 
 export function MemberManagement() {
@@ -42,28 +43,32 @@ export function MemberManagement() {
         // Fetch ALL users regardless of status using service role (bypasses RLS)
         const { data: users, error: usersError } = await supabase
           .from('users')
-          .select('id, phone_number, invite_code, created_at, vip_level, is_agent, main_balance, game_balance, status')
+          .select('id, phone_number, referral_code, created_at, vip_level, is_agent, main_balance, game_balance, status')
           .order('created_at', { ascending: false })
           .limit(500);
 
         if (usersError) throw usersError;
 
-        const mapped = (users || []).map((row: any) => ({
-          id: row.id,
-          uid: row.invite_code || row.id.replace(/-/g,'').slice(0,6).toUpperCase(),
-          phone: row.phone_number || '',
-          email: `${row.phone_number || 'member'}@winclub.com`,
-          username: `MEMBER_${(row.phone_number || '').slice(-4) || row.invite_code || '----'}`,
-          joined: row.created_at || '',
-          deposits: 0,
-          withdrawals: 0,
-          balance: Number(row.main_balance ?? 0),
-          winLoss: 0,
-          lastActive: row.created_at || '',
-          ipAddresses: [],
-          deviceIds: [],
-          status: (row.status || 'active') as 'active' | 'suspended' | 'banned',
-        }));
+        const mapped = (users || []).map((row: any) => {
+          const realUID = row.referral_code || '';
+          return {
+            id: row.id,
+            uid: realUID,
+            phone: row.phone_number || '',
+            email: `${row.phone_number || 'member'}@winclub.com`,
+            username: realUID,
+            joined: row.created_at || '',
+            deposits: 0,
+            withdrawals: 0,
+            balance: Number(row.main_balance ?? 0),
+            winLoss: 0,
+            lastActive: row.created_at || '',
+            ipAddresses: [],
+            deviceIds: [],
+            status: (row.status || 'active') as 'active' | 'suspended' | 'banned',
+            referral_code: realUID,
+          };
+        });
 
         setMembers(mapped);
       } catch (err: any) {
@@ -78,9 +83,12 @@ export function MemberManagement() {
 
   const filteredMembers = members.filter((member) => {
     if (!searchQuery) return true;
-    if (searchType === "uid") return member.uid.toLowerCase().includes(searchQuery.toLowerCase());
+    const query = searchQuery.toLowerCase().trim();
+    if (searchType === "uid") {
+      return member.uid.toLowerCase().includes(query);
+    }
     if (searchType === "phone") return member.phone.includes(searchQuery);
-    if (searchType === "email") return member.email.toLowerCase().includes(searchQuery.toLowerCase());
+    if (searchType === "email") return member.email.toLowerCase().includes(query);
     return true;
   });
 
@@ -186,12 +194,12 @@ export function MemberManagement() {
                 <div className="p-4 text-sm text-gray-500">Loading...</div>
               ) : filteredMembers.map((member) => (
                 <div key={member.uid}>
-                  <div onClick={() => setSelectedMember(selectedMember?.uid === member.uid ? null : member)}
+                  <div onClick={() => setSelectedMember(selectedMember?.id === member.id ? null : member)}
                     className={`p-4 cursor-pointer transition-all ${
-                      selectedMember?.uid === member.uid ? "bg-[#0f3460] border-l-4 border-[#e94560]" : "hover:bg-[#0f3460]/50"
+                      selectedMember?.id === member.id ? "bg-[#0f3460] border-l-4 border-[#e94560]" : "hover:bg-[#0f3460]/50"
                     }`}>
                     <div className="flex items-center justify-between mb-1">
-                      <p className="text-white font-bold text-sm">{member.uid}</p>
+                      <p className="text-white font-bold text-sm">{member.uid || 'N/A'}</p>
                       <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
                         member.status === "active" ? "bg-[#4ade80]/20 text-[#4ade80]" : "bg-[#ef4444]/20 text-[#ef4444]"
                       }`}>{member.status}</span>
@@ -202,7 +210,7 @@ export function MemberManagement() {
                     </div>
                   </div>
                   {/* Inline expanded detail on mobile */}
-                  {selectedMember?.uid === member.uid && (
+                  {selectedMember?.id === member.id && (
                     <div className="bg-[#0a0f1e] p-4 border-t border-[#0f3460]">
                       <div className="space-y-3 mb-4 text-sm">
                         <div className="bg-[#0f3460] rounded-lg p-3">
@@ -242,14 +250,14 @@ export function MemberManagement() {
                 {loading ? (
                   <div className="p-6 text-sm text-gray-500">Loading live member rows...</div>
                 ) : filteredMembers.map((member) => (
-                  <div key={member.uid} onClick={() => setSelectedMember(member)}
+                  <div key={member.id} onClick={() => setSelectedMember(member)}
                     className={`p-4 cursor-pointer transition-all ${
-                      selectedMember?.uid === member.uid ? "bg-[#0f3460] border-l-4 border-[#e94560]" : "hover:bg-[#0f3460]"
+                      selectedMember?.id === member.id ? "bg-[#0f3460] border-l-4 border-[#e94560]" : "hover:bg-[#0f3460]"
                     }`}>
                     <div className="flex items-start justify-between mb-2">
                       <div>
-                        <p className="text-white font-bold">{member.username}</p>
-                        <p className="text-gray-400 text-sm">{member.uid}</p>
+                        <p className="text-white font-bold">UID: {member.uid || 'N/A'}</p>
+                        <p className="text-gray-400 text-sm">{member.phone}</p>
                       </div>
                       <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
                         member.status === "active" ? "bg-[#4ade80]/20 text-[#4ade80]" : "bg-[#ef4444]/20 text-[#ef4444]"

@@ -205,7 +205,7 @@ BEGIN
     p_amount,
     p_method,
     p_account_name,
-    p_account_number,
+    p_account_no,
     'pending',
     p_remarks
   )

@@ -31,6 +31,7 @@ export default function DepositView({
   const [amount, setAmount] = useState<string>("300");
   const [selectedAmount, setSelectedAmount] = useState<number | null>(300);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const quickAmounts = [
     { value: 300, bonus: 6 },
@@ -46,38 +47,6 @@ export default function DepositView({
     { value: 30000, bonus: 600 },
     { value: 50000, bonus: 1000 },
   ];
-
-  const jazzcashLinks: Record<number, string> = {
-    300: "https://cashier.pkpay.click/pay/8fb65585df22bb6c",
-    500: "https://cashier.pkpay.click/pay/7099555e5d96948a",
-    800: "https://cashier.pkpay.click/pay/b40a681c9347518b",
-    1000: "https://cashier.pkpay.click/pay/e6adf22d1645a3c1",
-    2000: "https://cashier.pkpay.click/pay/c9c08cd3ac807b7b",
-    3000: "https://cashier.pkpay.click/pay/2e2843558794d95a",
-    5000: "https://cashier.pkpay.click/pay/9e1931ee76a1c7be",
-    8000: "https://cashier.pkpay.click/pay/3b953ec0d8c699cb",
-    10000: "https://cashier.pkpay.click/pay/bfa519a4a3557a4e",
-    20000: "https://cashier.pkpay.click/pay/c0346b6c6f66d9e1",
-    30000: "https://cashier.pkpay.click/pay/46ed4014c01a2dd2",
-    50000: "https://cashier.pkpay.click/pay/aa3071795294a6ed"
-  };
-
-  const EASY_PAISA_LINKS: Record<number, string> = {
-    50000: "https://cashier.pkpay.click/pay/387931f98134400e",
-    30000: "https://cashier.pkpay.click/pay/67e964fd8f780f66",
-    20000: "https://cashier.pkpay.click/pay/443568805ecbdd84",
-    10000: "https://cashier.pkpay.click/pay/a9038d8ae209d6d7",
-    8000: "https://cashier.pkpay.click/pay/ba86795097ff5508",
-    5000: "https://cashier.pkpay.click/pay/10b2aad1347174b4",
-    3000: "https://cashier.pkpay.click/pay/efc061dbaff90b93",
-    2000: "https://cashier.pkpay.click/pay/4428560b30bfb6d1",
-    1000: "https://cashier.pkpay.click/pay/8ad27749f7849fae",
-    800: "https://cashier.pkpay.click/pay/d0c12155e83081d0",
-    500: "https://cashier.pkpay.click/pay/d74d75b92aa0c111",
-    300: "https://cashier.pkpay.click/pay/445f3a965fe98b38",
-  };
-
-  const easypaisaLinks = EASY_PAISA_LINKS;
 
   useEffect(() => {
     if (!uid || !refreshUserData) return;
@@ -120,82 +89,35 @@ export default function DepositView({
       return;
     }
 
-    const links = selectedPaymentMethod === "easypaisa" ? easypaisaLinks : jazzcashLinks;
-    const targetUrl = links[amountToPay];
+    setIsLoading(true);
 
-    if (targetUrl) {
-      const urlParts = targetUrl.split('/');
-      const orderId = urlParts[urlParts.length - 1];
-      
-      if (!orderId) {
-        console.error('[DepositView] Failed to extract order_id from PKPay URL');
-        window.location.href = targetUrl;
+    try {
+      console.log(`[DepositView] Creating checkout: amount=${amountToPay}, method=${selectedPaymentMethod}`);
+
+      const response = await fetch("/api/create-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          amount: amountToPay,
+          method: selectedPaymentMethod,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        console.error("[DepositView] Checkout creation failed:", data.error);
+        alert(`Failed to create checkout: ${data.error}`);
+        setIsLoading(false);
         return;
       }
 
-      // CRITICAL FIX: Get user_id from auth session (most reliable source)
-      const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-
-      if (!userId) {
-        console.error('[DepositView] No authenticated user found. Cannot create deposit record.');
-        alert('Authentication error. Please log in again.');
-        return;
-      }
-
-      try {
-        // Check if pending deposit already exists for this order_id
-        const { data: existingDeposit, error: checkError } = await (supabase as any)
-          .from('deposit_history')
-          .select('id, status')
-          .eq('order_id', orderId)
-          .eq('user_id', userId)
-          .eq('status', 'pending')
-          .single();
-
-        if (existingDeposit) {
-          console.log(`[DepositView] Pending deposit already exists for order_id=${orderId}. Redirecting to payment gateway.`);
-          window.location.href = targetUrl;
-          return;
-        }
-
-        console.log(`[DepositView] Creating deposit_history: user_id=${userId}, order_id=${orderId}, amount=${amountToPay}, method=${selectedPaymentMethod}`);
-        
-        const { data, error } = await (supabase as any)
-          .from('deposit_history')
-          .insert([{
-            user_id: userId,
-            amount: amountToPay,
-            method: selectedPaymentMethod.toUpperCase(),
-            order_id: orderId,
-            pkpay_order_id: null,
-            gateway_ref: targetUrl,
-            status: 'pending',
-            remarks: `PKPay deposit via ${selectedPaymentMethod.toUpperCase()}. Amount Rs ${amountToPay}`,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          }]);
-
-        if (error) {
-          console.error('[DepositView] FAILED to create deposit_history:', error);
-          console.error('Details:', { userId, orderId, amount: amountToPay, method: selectedPaymentMethod });
-          alert('Failed to create deposit record. Please try again.');
-          return;
-        }
-
-        console.log(`[DepositView] SUCCESS: Created pending deposit_history: order_id=${orderId}, user_id=${userId}, amount=${amountToPay}`);
-        
-        // Redirect AFTER successful insert
-        // PKPay checkout URL format - return_url should be in the payment link itself
-        // The payment link already has the return URL configured in PKPay dashboard
-        window.location.href = targetUrl;
-      } catch (error) {
-        console.error('[DepositView] Exception creating deposit record:', error);
-        alert('An error occurred. Please try again.');
-        return;
-      }
-    } else {
-      alert("Automated deposits are only available for fixed packages right now. Please select a supported quick amount for the selected gateway.");
+      console.log(`[DepositView] Checkout created: ${data.checkoutUrl}`);
+      window.location.href = data.checkoutUrl;
+    } catch (error) {
+      console.error("[DepositView] Exception:", error);
+      alert("An error occurred. Please try again.");
+      setIsLoading(false);
     }
   };
 
@@ -203,8 +125,7 @@ export default function DepositView({
     quickAmounts.find((q) => q.value === parseInt(amount))?.bonus || 0;
 
   const amountNum = selectedAmount || parseInt(amount);
-  const payLinks = selectedPaymentMethod === 'easypaisa' ? easypaisaLinks : jazzcashLinks;
-  const isAmountSupported = !!(amountNum && payLinks && payLinks[amountNum]);
+  const isAmountSupported = amountNum >= 300 && amountNum <= 50000;
 
   return (
     <div className="flex-1 flex flex-col bg-[#05070e] h-screen overflow-y-auto relative text-white">
@@ -296,7 +217,7 @@ export default function DepositView({
         </div>
 
         <div className="grid grid-cols-4 gap-2">
-          {(selectedPaymentMethod === 'easypaisa' ? quickAmounts.filter(q => EASY_PAISA_LINKS[q.value]) : quickAmounts).map((q) => {
+          {quickAmounts.map((q) => {
             const isSelected = selectedAmount === q.value;
             return (
               <button
@@ -405,14 +326,14 @@ export default function DepositView({
           <button
             onClick={handlePayNow}
             type="button"
-            disabled={!isAmountSupported}
+            disabled={!isAmountSupported || isLoading}
             className={`w-11/12 max-w-xs text-white font-bold text-base py-3 rounded-full transition-all duration-300 active:scale-[0.97] border ${
-              isAmountSupported 
-                ? 'bg-[#1C2DFF] hover:bg-[#2563eb] border-blue-400/40 shadow-[0_0_18px_rgba(28,45,255,0.6)] hover:shadow-[0_0_25px_rgba(37,99,235,0.8)] cursor-pointer' 
-                : 'bg-slate-800/90 border-white/5 opacity-50 cursor-not-allowed' 
+              isAmountSupported && !isLoading
+                ? "bg-[#1C2DFF] hover:bg-[#2563eb] border-blue-400/40 shadow-[0_0_18px_rgba(28,45,255,0.6)] hover:shadow-[0_0_25px_rgba(37,99,235,0.8)] cursor-pointer"
+                : "bg-slate-800/90 border-white/5 opacity-50 cursor-not-allowed"
             }`}
           >
-            Pay with {selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}
+            {isLoading ? "Creating checkout..." : `Pay with ${selectedPaymentMethod === "easypaisa" ? "Easypaisa" : "Jazzcash"}`}
           </button>
         </div>
       </div>

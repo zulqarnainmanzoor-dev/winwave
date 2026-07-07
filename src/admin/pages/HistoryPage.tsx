@@ -33,7 +33,7 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
           // Display: User ID, Amount, Timestamp, Order No, Gateway Provider, Status, Admin Remarks
           let q = sb
             .from("withdrawal_history")
-            .select("id, user_id, amount, method, account_number, account_name, status, gateway_ref, reason, remarks, created_at")
+            .select("id, user_id, amount, method, account_no, account_name, status, gateway_ref, reason, remarks, created_at")
             .order("created_at", { ascending: false })
             .limit(200);
           if (statusFilter !== "all") q = q.eq("status", statusFilter);
@@ -121,21 +121,21 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
 
       // Enrich with user info
       const userIds = [...new Set(rawRows.map((r: any) => r.user_id).filter(Boolean))];
-      const userMap: Record<string, { invite_code: string; phone: string }> = {};
+      const userMap: Record<string, { referral_code: string; phone: string }> = {};
       if (userIds.length > 0) {
         const { data: users } = await sb
           .from("users")
-          .select("id, invite_code, phone_number")
+          .select("id, referral_code, phone_number")
           .in("id", userIds);
         (users || []).forEach((u: any) => {
-          userMap[u.id] = { invite_code: u.invite_code || "—", phone: u.phone_number || "—" };
+          userMap[u.id] = { referral_code: u.referral_code || "—", phone: u.phone_number || "—" };
         });
       }
 
       const enriched = rawRows.map((r: any) => ({
         id:          r.id,
         user_id:     r.user_id,
-        invite_code: userMap[r.user_id]?.invite_code || "—",
+        referral_code: userMap[r.user_id]?.referral_code || "—",
         phone:       userMap[r.user_id]?.phone || "—",
         amount:      Number(r.amount ?? 0),
         status:      r.status || "—",
@@ -234,7 +234,7 @@ export function HistoryPage({ historyType }: HistoryPageProps) {
                   rows.map(row => (
                     <tr key={row.id} className="border-b border-[#0f3460]/60 hover:bg-[#0f3460]/40 transition-colors">
                       <td className="py-3 px-4 text-gray-400 text-xs">{new Date(row.created_at).toLocaleString()}</td>
-                      <td className="py-3 px-4 text-amber-400 font-black font-mono">{row.invite_code}</td>
+                      <td className="py-3 px-4 text-amber-400 font-black font-mono">{row.referral_code}</td>
                       <td className="py-3 px-4 text-gray-300 font-mono text-xs">{row.phone}</td>
                       <td className="py-3 px-4 text-amber-400 font-bold">Rs {row.amount.toLocaleString()}</td>
                       <td className="py-3 px-4 text-xs">

@@ -15,8 +15,8 @@ interface SubStats {
 
 interface InviteeRow {
   id: string;
-  phone_number: string | null;
   referral_code: string | null;
+  phone_number: string | null;
   invite_code: string | null;
   total_bets: number;
   account_status: string | null;
@@ -31,12 +31,12 @@ interface InviteeRow {
 
 interface SubordinateRow {
   id: string;
-  uid: string;
+  referral_code: string | null;
+  phone_number?: string;
   level: number;
   deposit_amount: number;
   commission: number;
   created_at: string;
-  phone_number?: string;
 }
 
 const DATE_OPTIONS = ["All", "Today", "Yesterday", "This Week", "This Month", "Last Month"];
@@ -116,19 +116,31 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
   const fetchInvitees = useCallback(async () => {
     if (!uid) return;
     try {
-      let query = adminSupabase
+      const { data, error } = await adminSupabase
         .from('users')
-        .select('id, phone_number, referral_code, invite_code, total_bets, account_status, created_at, referred_by, main_balance, game_balance, total_deposit, total_withdrawal, vip_level')
+        .select('id, referral_code, phone_number, invite_code, total_bets, account_status, created_at, referred_by, main_balance, game_balance, total_deposit, total_withdrawal, vip_level')
         .eq('referred_by', uid)
         .order('created_at', { ascending: false });
 
+      if (error) throw error;
+
+      let results = (data || []) as InviteeRow[];
+
+      // Filter by search term (UID or phone number)
       if (searchId.trim()) {
-        query = query.ilike('phone_number', `%${searchId.trim()}%`);
+        const searchTerm = searchId.trim().toLowerCase();
+        results = results.filter((user) => {
+          // Search by numeric UID (referral_code field)
+          const uidMatch = (user.referral_code || '').toLowerCase().includes(searchTerm);
+          
+          // Search by phone number
+          const phoneMatch = (user.phone_number || '').toLowerCase().includes(searchTerm);
+          
+          return uidMatch || phoneMatch;
+        });
       }
 
-      const { data, error } = await query;
-      if (error) throw error;
-      setInvitees((data || []) as InviteeRow[]);
+      setInvitees(results);
     } catch (err) {
       console.error('[InviteesOverview] fetchInvitees failed:', err);
       setInvitees([]);
@@ -140,28 +152,39 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
     if (!uid) return;
     setSubordinatesLoading(true);
     try {
-      let query = adminSupabase
+      const { data, error } = await adminSupabase
         .from('users')
-        .select('id, phone_number, created_at, referred_by, total_deposit, vip_level')
+        .select('id, referral_code, phone_number, created_at, referred_by, total_deposit, vip_level')
         .eq('referred_by', uid)
         .order('created_at', { ascending: false });
 
-      if (searchId.trim()) {
-        query = query.ilike('phone_number', `%${searchId.trim()}%`);
-      }
-
-      const { data, error } = await query;
       if (error) throw error;
 
-      setSubordinates((data || []).map((sub: any) => ({
+      let results = (data || []).map((sub: any) => ({
         id:             sub.id,
-        uid:            sub.id.replace(/-/g, '').slice(0, 9),
+        referral_code:  sub.referral_code,
+        phone_number:   sub.phone_number,
         level:          Number(sub.vip_level || 0),
         deposit_amount: Number(sub.total_deposit || 0),
         commission:     0,
         created_at:     sub.created_at,
-        phone_number:   sub.phone_number,
-      })));
+      }));
+
+      // Filter by search term (UID or phone number)
+      if (searchId.trim()) {
+        const searchTerm = searchId.trim().toLowerCase();
+        results = results.filter((sub) => {
+          // Search by numeric UID (referral_code field)
+          const uidMatch = (sub.referral_code || '').toLowerCase().includes(searchTerm);
+          
+          // Search by phone number
+          const phoneMatch = (sub.phone_number || '').toLowerCase().includes(searchTerm);
+          
+          return uidMatch || phoneMatch;
+        });
+      }
+
+      setSubordinates(results);
     } catch (err) {
       console.error('[InviteesOverview] fetchSubordinates failed:', err);
       setSubordinates([]);
@@ -317,7 +340,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                   </div>
                   {subordinates.map((sub) => (
                     <div key={sub.id} className="grid grid-cols-5 p-3 text-xs text-center items-center hover:bg-white/[0.02] transition-colors">
-                      <span className="font-mono text-white font-bold text-[11px]">{sub.uid}</span>
+                      <span className="font-mono text-white font-bold text-[11px]">{(sub.referral_code || '').toUpperCase()}</span>
                       <span className="text-center">
                         <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-black ${
                           sub.level === 1 ? 'bg-orange-500/20 text-orange-400' : 'bg-green-500/20 text-green-400'
@@ -339,7 +362,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
           <div className="space-y-4">
             <div className="relative">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
-              <input type="text" placeholder="Search by phone number" value={searchId}
+              <input type="text" placeholder="Search by UID or Phone Number" value={searchId}
                 onChange={(e) => setSearchId(e.target.value)}
                 className="w-full bg-[#1C1C1E] border border-white/5 rounded-full py-3 pl-10 pr-4 text-xs font-bold text-white placeholder-gray-500 focus:outline-none focus:border-orange-500/50" />
               {searchId && (
@@ -372,7 +395,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                 {invitees.map((u: any) => {
                   const statusLabel = u.account_status === "banned" ? "Banned" : u.account_status === "suspended" ? "Suspended" : "Active";
                   const statusClass = u.account_status === "banned" ? "text-red-500" : u.account_status === "suspended" ? "text-yellow-500" : "text-green-400";
-                  const shortUid = (u.id || "").replace(/-/g, "").slice(0, 8).toUpperCase();
+                  const shortUid = (u.referral_code || "").toUpperCase();
                   const deposit = Number(u.total_deposit || 0);
                   const withdrawal = Number(u.total_withdrawal || 0);
                   const mainBalance = Number(u.main_balance || 0);
@@ -385,7 +408,7 @@ export default function InviteesOverviewView({ onBack }: { onBack: () => void })
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <div className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-500">UID</div>
-                          <div className="text-sm font-black text-white">{shortUid}</div>
+                          <div className="text-sm font-black text-white">{shortUid || "—"}</div>
                         </div>
                         <div className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${statusClass}`}>
                           {statusLabel}

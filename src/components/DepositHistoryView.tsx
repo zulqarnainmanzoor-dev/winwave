@@ -248,12 +248,19 @@ export default function DepositHistoryView({ onBack }: { onBack: () => void }) {
                   </div>
                 </div>
 
-                {/* Row 3: Gateway Reference */}
-                {dep.gateway_ref && (
+                {/* Row 3: Order ID */}
+                {dep.order_id && (
                   <div className="text-[10px] text-gray-500 font-mono bg-white/5 rounded-lg px-3 py-2">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-gray-400">Gateway:</span>
-                      <span className="text-gray-300">{dep.gateway_ref.substring(0, 30)}...</span>
+                      <span className="text-gray-400">Order ID:</span>
+                      <span className="text-gray-300 font-bold">{dep.order_id}</span>
+                      <button onClick={() => handleCopy(dep.order_id!, `order-full-${dep.id}`)} className="ml-auto hover:text-white transition-colors">
+                        {copiedField === `order-full-${dep.id}` ? (
+                          <Check className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3 h-3 text-gray-400 hover:text-white" />
+                        )}
+                      </button>
                     </div>
                   </div>
                 )}

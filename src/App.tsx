@@ -35,6 +35,7 @@ import GameStatistics from './components/GameStatistics';
 import TransactionView from './components/TransactionView';
 import DepositView from './components/DepositView';
 import DepositHistoryView from './components/DepositHistoryView';
+import DepositReturnPage from './components/DepositReturnPage';
 import WithdrawHistoryView from './components/WithdrawHistoryView';
 import WithdrawView from './components/WithdrawView';
 import VIPView from './components/VIPView';
@@ -320,6 +321,15 @@ const App: React.FC = () => {
                       onWalletClick={() => setCurrentView('wallet')}
                     />
                   )}
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/deposit-return"
+              element={
+                <ProtectedRoute>
+                  <DepositReturnPage />
                 </ProtectedRoute>
               }
             />
