@@ -55,7 +55,7 @@ router.post('/', async (req: any, res) => {
     if (depositError) {
       console.error('[create-checkout] Failed to create deposit record:', depositError);
       console.error('[create-checkout] Deposit insert payload:', JSON.stringify(depositData));
-      return res.status(depositError.status || 500).json({
+      return res.status(500).json({
         error: `Failed to create deposit record: ${depositError.message}`,
       });
     }
@@ -91,7 +91,6 @@ router.post('/', async (req: any, res) => {
       const { error: updateError } = await supabaseAdmin
         .from('deposit_history')
         .update({
-          pkpay_order_id: checkoutResult.pkpayOrderId || null,
           gateway_ref: checkoutResult.checkoutUrl || null,
           updated_at: new Date().toISOString(),
         })
