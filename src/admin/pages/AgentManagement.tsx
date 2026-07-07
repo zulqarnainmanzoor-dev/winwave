@@ -242,9 +242,9 @@ export function AgentManagement() {
 
   const handleGiveAdvance = async () => {
     if (!agentData || !advanceAmount) return;
-    const newBal = agentData.game_balance + parseFloat(advanceAmount);
-    const { error } = await (adminSupabase as any).from("users").update({ game_balance: newBal }).eq("id", agentData.id);
-    if (!error) { setAgentData({ ...agentData, game_balance: newBal }); setAdvanceAmount(""); setShowAdvanceModal(false); }
+    const newBal = agentData.main_balance + parseFloat(advanceAmount);
+    const { error } = await (adminSupabase as any).from("users").update({ main_balance: newBal }).eq("id", agentData.id);
+    if (!error) { setAgentData({ ...agentData, main_balance: newBal }); setAdvanceAmount(""); setShowAdvanceModal(false); }
   };
 
   // ── Agent Fraud Network Analysis ─────────────────────────────────
