@@ -146,7 +146,7 @@ export function AgentManagement() {
       const user = data as any;
 
       // Fetch dashboard stats using RPC
-      let stats = {};
+      let stats: { total_bets?: number; total_members?: number; today_commission?: number } = {};
       try {
         // Try new correct function first
         const { data: dashStats, error: dashError } = await (adminSupabase as any)
