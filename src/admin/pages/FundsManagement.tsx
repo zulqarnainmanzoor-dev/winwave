@@ -399,6 +399,14 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
       </div>
       {(req.status === "pending" || req.status === "processing") && (
         <div className="space-y-2">
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-2 mb-3">
+            <p className="text-blue-400 text-xs font-bold">Withdrawal Flow</p>
+            <p className="text-blue-300 text-[10px] mt-1">
+              {req.status === "pending" 
+                ? "Step 1/2: Approve withdrawal request" 
+                : "Step 2/2: Send payment to user's account"}
+            </p>
+          </div>
           <button onClick={() => handleApprove()} disabled={acting || isSubAdmin}
             className={`w-full py-3 rounded-lg font-black text-sm min-h-[44px] flex items-center justify-center gap-2 ${
               isSubAdmin
@@ -406,7 +414,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
                 : "bg-gradient-to-r from-emerald-500 to-green-500 text-white hover:brightness-110 disabled:opacity-50"
             }`}>
             {isSubAdmin ? <Eye className="w-4 h-4" /> : null}
-            {isSubAdmin ? "View Only (Read-Only Mode)" : acting ? "Processing..." : req.status === "pending" ? (req.type === "withdraw" ? (req.is_agent ? "✓ Release Agent Salary" : "✓ Approve Withdrawal") : "✓ Approve Deposit") : "✓ Submit Withdrawal"}
+            {isSubAdmin ? "View Only (Read-Only Mode)" : acting ? "Processing..." : req.status === "pending" ? (req.type === "withdraw" ? (req.is_agent ? "✓ Approve Agent Salary" : "✓ Approve Withdrawal") : "✓ Approve Deposit") : "✓ Send Payment"}
           </button>
           {req.status === "pending" && (
             <button onClick={() => setShowReject(true)} disabled={acting || isSubAdmin}
