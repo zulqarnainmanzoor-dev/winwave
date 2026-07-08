@@ -112,8 +112,8 @@ router.post('/', async (req, res) => {
         await supabaseAdmin
           .from("withdrawal_history")
           .update({ 
-            status: "pending", 
-            gateway_error_logs: `Gateway returned non-JSON response: ${plainErrorText.substring(0, 200)}`,
+            status: "processing", 
+            remarks: `Gateway returned non-JSON response: ${plainErrorText.substring(0, 200)}`,
             updated_at: new Date().toISOString()
           } as unknown as Database['public']['Tables']['withdrawal_history']['Update'])
           .eq("id", withdrawal_id);
@@ -182,8 +182,8 @@ router.post('/', async (req, res) => {
         const { error: updateError } = await supabaseAdmin
           .from("withdrawal_history")
           .update({ 
-            status: "pending", 
-            gateway_error_logs: errorMessage,
+            status: "processing", 
+            remarks: errorMessage,
             updated_at: new Date().toISOString()
           } as any)
           .eq("id", withdrawal_id);
@@ -194,7 +194,7 @@ router.post('/', async (req, res) => {
 
         return res.status(400).json({ 
           success: false, 
-          error: "Gateway Payout Failed: Please check merchant account balance on PKPAY." 
+          error: "Gateway Payout Failed: " + errorMessage
         });
       }
     } catch (supabaseError: any) {
