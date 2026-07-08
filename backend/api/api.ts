@@ -31,9 +31,8 @@ router.post('/create-checkout', createCheckoutRouter);
 router.use('/claim-commission', claimCommissionRouter);
 
 // Legacy compatibility alias
-router.post('/webhooks/pkpay', (req, res, next) => {
-  req.url = '/webhook/deposit';
-  return depositWebhookHandler(req, res, next);
+router.post('/webhooks/pkpay', (req, res) => {
+  return depositWebhookHandler(req, res);
 });
 
 router.use('/wallet', walletRouter);

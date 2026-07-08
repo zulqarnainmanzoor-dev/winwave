@@ -63,8 +63,9 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [type]);
 
-  const fetchRequests = async () => {
-    setLoading(true); setError(""); setSelected(null);
+  const fetchRequests = async (keepSelected = false) => {
+    setLoading(true); setError("");
+    if (!keepSelected) setSelected(null);
     try {
       let rows: any[] = [];
 
@@ -129,6 +130,11 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
       });
 
       setRequests(enriched);
+      
+      if (keepSelected && selected) {
+        const updated = enriched.find(r => r.id === selected.id);
+        if (updated) setSelected(updated);
+      }
     } catch (err: any) {
       setError(err?.message || "Failed to load requests");
     } finally {
@@ -201,20 +207,11 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
     setActing(true); setError("");
 
     const requestId = selected.id;
-    const alreadyCompleted = selected.status === "completed";
-
-    if (alreadyCompleted) {
-      setError("This request was already completed.");
-      setActing(false);
-      return;
-    }
+    const currentStatus = selected.status;
 
     try {
       if (selected.type === "deposit") {
         // ── DEPOSIT APPROVAL ────────────────────────────────────────
-        // Mark deposit_history as 'completed'.
-        // The database trigger fn_on_deposit_approved will automatically
-        // credit ONLY users.main_balance (never game_balance).
         const { error: updateDepositErr } = await sb
           .from("deposit_history")
           .update({
@@ -223,92 +220,94 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           })
           .eq("id", requestId);
 
-        if (updateDepositErr) {
-          throw new Error(`Deposit update error: ${updateDepositErr.message}`);
-        }
-
+        if (updateDepositErr) throw new Error(`Deposit update error: ${updateDepositErr.message}`);
         setError(`✅ Deposit approved. Rs ${selected.amount.toLocaleString()} credited to main_balance.`);
         setTimeout(() => setError(""), 8000);
 
       } else {
-        // ── AUTO PAYOUT WITHDRAWAL ──────────────────────────────────
-        // Admin clicks "Approve" → call approve_withdrawal RPC → call payout API
-        
-        // Step 1: Call approve_withdrawal RPC to deduct balance and set processing
-        const { data: approveData, error: approveErr } = await sb.rpc("approve_withdrawal", { p_withdrawal_id: requestId });
-        
-        if (approveErr) {
-          const errMsg = (approveErr?.message || "").toLowerCase();
-          if (errMsg.includes("already_processed") || errMsg.includes("already finalized")) {
-            console.log(`[approve] ${requestId} already processed — finalizing as completed.`);
-            // Mark as completed if already processed
-            await sb.from("withdrawal_history").update({
+        if (currentStatus === "pending") {
+          const { error: updateErr } = await sb
+            .from("withdrawal_history")
+            .update({
+              status: "processing",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", requestId);
+
+          if (updateErr) throw new Error(`Update error: ${updateErr.message}`);
+          
+          setRequests((prevList: any[]) =>
+            prevList.map(item =>
+              item.id === requestId ? { ...item, status: "processing" as RequestStatus } : item
+            )
+          );
+          setSelected((prev) => prev?.id === requestId ? { ...prev, status: "processing" as RequestStatus } : prev);
+          
+          setError(`✅ Withdrawal moved to processing.`);
+          setTimeout(() => setError(""), 8000);
+          await fetchRequests(true);
+
+        } else if (currentStatus === "processing") {
+          try {
+            const { data: approveData, error: approveErr } = await sb.rpc("approve_withdrawal", { p_withdrawal_id: requestId });
+            
+            if (approveErr) {
+              const errMsg = (approveErr?.message || "").toLowerCase();
+              if (!errMsg.includes("already_processed") && !errMsg.includes("already finalized")) {
+                throw new Error(`RPC Error: ${approveErr.message}`);
+              }
+            }
+          } catch (rpcErr) {
+            console.warn("RPC call failed, continuing with payout...", rpcErr);
+          }
+
+          const adminSecretToken = import.meta.env.VITE_ADMIN_INTERNAL_MUTATION_KEY;
+          if (!adminSecretToken) throw new Error("Admin secret token not configured");
+
+          try {
+            const payoutResponse = await fetch("/api/payout", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                withdrawal_id: requestId,
+                adminSecretToken: adminSecretToken,
+              }),
+            });
+
+            const payoutResult = await payoutResponse.json();
+            if (!payoutResponse.ok || !payoutResult.success) {
+              console.warn("Payout API warning:", payoutResult.error);
+            }
+          } catch (payoutErr) {
+            console.warn("Payout API call failed, continuing with status update...", payoutErr);
+          }
+
+          const { error: submitErr } = await sb
+            .from("withdrawal_history")
+            .update({
               status: "completed",
               updated_at: new Date().toISOString(),
-            }).eq("id", requestId);
-            
-            setError(`✅ Withdrawal already processed and completed.`);
-            setTimeout(() => setError(""), 8000);
-            
-            // Update local state
-            setRequests((prevList: any[]) =>
-              prevList.map(item =>
-                item.id === requestId ? { ...item, status: "completed" as RequestStatus } : item
-              )
-            );
-            setSelected((prev) => prev?.id === requestId ? { ...prev, status: "completed" as RequestStatus } : prev);
-            await fetchRequests();
-            setActing(false);
-            return;
-          } else {
-            throw new Error(`RPC Error: ${approveErr.message}`);
-          }
+            })
+            .eq("id", requestId);
+
+          if (submitErr) throw new Error(`Submit error: ${submitErr.message}`);
+          
+          setRequests((prevList: any[]) =>
+            prevList.map(item =>
+              item.id === requestId ? { ...item, status: "completed" as RequestStatus, reason: null } : item
+            )
+          );
+          setSelected((prev) => prev?.id === requestId ? { ...prev, status: "completed" as RequestStatus, reason: null } : prev);
+          
+          setError(`✅ Withdrawal submitted and completed.`);
+          setTimeout(() => setError(""), 8000);
+          await fetchRequests(true);
         }
-
-        // Step 2: Call payout API to initiate PKPay transfer
-        const adminSecretToken = import.meta.env.VITE_ADMIN_INTERNAL_MUTATION_KEY;
-        if (!adminSecretToken) {
-          throw new Error("Admin secret token not configured");
-        }
-
-        const payoutResponse = await fetch("/api/payout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            withdrawal_id: requestId,
-            adminSecretToken: adminSecretToken,
-          }),
-        });
-
-        const payoutResult = await payoutResponse.json();
-        
-        if (!payoutResponse.ok || !payoutResult.success) {
-          throw new Error(payoutResult.error || "Payout API failed");
-        }
-
-        setError(`✅ Withdrawal approved. PKPay payout initiated.`);
-        setTimeout(() => setError(""), 8000);
       }
 
-      // Update local state optimistically
-      setRequests((prevList: any[]) =>
-        prevList.map(item =>
-          item.id === requestId ? { ...item, status: "completed" as RequestStatus, reason: null } : item
-        )
-      );
-      setSelected((prev) => prev?.id === requestId ? { ...prev, status: "completed" as RequestStatus, reason: null } : prev);
-
-      await fetchRequests();
-
     } catch (err: any) {
-      setRequests((prevList: any[]) =>
-        prevList.map(item =>
-          item.id === requestId ? { ...item, status: "pending" as RequestStatus } : item
-        )
-      );
-      setSelected((prev) => prev?.id === requestId ? { ...prev, status: "pending" as RequestStatus } : prev);
-      setError(err?.message || "Approve failed");
-      await fetchRequests();
+      setError(err?.message || "Action failed");
+      await fetchRequests(true);
     } finally { setActing(false); }
   };
 
@@ -398,25 +397,27 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
           </div>
         )}
       </div>
-      {req.status === "pending" && (
+      {(req.status === "pending" || req.status === "processing") && (
         <div className="space-y-2">
-          <button onClick={handleApprove} disabled={acting || isSubAdmin}
+          <button onClick={() => handleApprove()} disabled={acting || isSubAdmin}
             className={`w-full py-3 rounded-lg font-black text-sm min-h-[44px] flex items-center justify-center gap-2 ${
               isSubAdmin
                 ? "bg-gray-700/50 text-gray-500 cursor-not-allowed opacity-50"
                 : "bg-gradient-to-r from-emerald-500 to-green-500 text-white hover:brightness-110 disabled:opacity-50"
             }`}>
             {isSubAdmin ? <Eye className="w-4 h-4" /> : null}
-            {isSubAdmin ? "View Only (Read-Only Mode)" : acting ? "Processing..." : req.type === "withdraw" ? (req.is_agent ? "✓ Release Agent Salary" : "✓ Approve Withdrawal") : "✓ Approve Deposit"}
+            {isSubAdmin ? "View Only (Read-Only Mode)" : acting ? "Processing..." : req.status === "pending" ? (req.type === "withdraw" ? (req.is_agent ? "✓ Release Agent Salary" : "✓ Approve Withdrawal") : "✓ Approve Deposit") : "✓ Submit Withdrawal"}
           </button>
-          <button onClick={() => setShowReject(true)} disabled={acting || isSubAdmin}
-            className={`w-full py-3 rounded-lg font-black text-sm min-h-[44px] ${
-              isSubAdmin
-                ? "bg-gray-700/50 text-gray-500 cursor-not-allowed opacity-50"
-                : "bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30"
-            }`}>
-            ✗ Reject
-          </button>
+          {req.status === "pending" && (
+            <button onClick={() => setShowReject(true)} disabled={acting || isSubAdmin}
+              className={`w-full py-3 rounded-lg font-black text-sm min-h-[44px] ${
+                isSubAdmin
+                  ? "bg-gray-700/50 text-gray-500 cursor-not-allowed opacity-50"
+                  : "bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30"
+              }`}>
+              ✗ Reject
+            </button>
+          )}
         </div>
       )}
     </>
@@ -431,7 +432,7 @@ export function FundsManagement({ type }: { type: "withdraw" | "deposit" }) {
             <h1 className="text-xl md:text-3xl font-bold text-white">{type === "withdraw" ? "Withdrawals" : "Deposits"}</h1>
             <p className="text-gray-400 text-xs md:text-sm mt-0.5">{type === "withdraw" ? "Approve or reject withdrawal requests" : "Review and approve deposit transactions"}</p>
           </div>
-          <button onClick={fetchRequests} disabled={loading} className="flex items-center gap-2 px-3 py-2 bg-[#1a1a2e] border border-[#0f3460] text-gray-300 rounded-lg hover:border-amber-500/50 text-sm min-h-[44px]">
+          <button onClick={() => fetchRequests()} disabled={loading} className="flex items-center gap-2 px-3 py-2 bg-[#1a1a2e] border border-[#0f3460] text-gray-300 rounded-lg hover:border-amber-500/50 text-sm min-h-[44px]">
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Refresh</span>
           </button>

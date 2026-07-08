@@ -13,34 +13,34 @@ router.post('/', async (req, res) => {
   try {
     console.log(`[verify-deposit] Checking deposit: order_id=${order_id}, user_id=${user_id}`);
 
-    // Get deposit record - try both order_id and pkpay_order_id
+    // Get deposit record - try order_id first (our unique identifier)
     let deposit = null;
     
-    // First try: Look up by pkpay_order_id
-    const { data: depositByPkpayId, error: errorByPkpayId } = await supabaseAdmin
+    // First try: Look up by our order_id (unique identifier we generated)
+    const { data: depositByOrderId, error: errorByOrderId } = await supabaseAdmin
       .from('deposit_history')
       .select('id, status, amount, method, user_id')
-      .eq('pkpay_order_id', order_id)
+      .eq('order_id', order_id)
       .eq('user_id', user_id)
       .maybeSingle();
 
-    if (depositByPkpayId) {
-      deposit = depositByPkpayId;
-      console.log('[verify-deposit] Found by pkpay_order_id');
+    if (depositByOrderId) {
+      deposit = depositByOrderId;
+      console.log('[verify-deposit] Found by order_id');
     } else {
-      // Second try: Look up by order_id
-      const { data: depositByOrderId, error: errorByOrderId } = await supabaseAdmin
+      // Second try: Look up by pkpay_order_id (fallback for older records)
+      const { data: depositByPkpayId, error: errorByPkpayId } = await supabaseAdmin
         .from('deposit_history')
         .select('id, status, amount, method, user_id')
-        .eq('order_id', order_id)
+        .eq('pkpay_order_id', order_id)
         .eq('user_id', user_id)
         .maybeSingle();
 
-      if (depositByOrderId) {
-        deposit = depositByOrderId;
-        console.log('[verify-deposit] Found by order_id');
+      if (depositByPkpayId) {
+        deposit = depositByPkpayId;
+        console.log('[verify-deposit] Found by pkpay_order_id');
       } else {
-        const error = errorByOrderId || errorByPkpayId;
+        const error = errorByPkpayId || errorByOrderId;
         if (error) {
           console.error('[verify-deposit] Error fetching deposit:', error);
           return res.status(500).json({ error: 'Failed to fetch deposit' });
